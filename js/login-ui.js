@@ -67,29 +67,91 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
       return;
     }
 
-    const lista = estado.funcionarios.length
-      ? criar(
-          'ul',
-          { classe: 'lista-funcionarios' },
-          estado.funcionarios.map((funcionario) =>
-            criar('li', {}, [
-              criar(
-                'button',
-                { classe: 'item-funcionario', type: 'button', onClick: () => passoPin(funcionario) },
-                [
-                  criar('span', { classe: 'if-nome', texto: funcionario.nome }),
-                  criar('span', { classe: 'if-matricula', texto: funcionario.matricula }),
-                ],
-              ),
-            ]),
-          ),
-        )
-      : criar('p', { classe: 'vazio', texto: 'Nenhum funcionario cadastrado neste setor ainda.' });
+    // Setor ainda sem ninguem cadastrado: nao ha o que buscar.
+    if (!estado.funcionarios.length) {
+      preencher(container, [
+        cabecalhoPasso(`Setor: ${setor.nome}`, passoSetor),
+        criar('h2', { classe: 'titulo-passo', texto: 'Funcionarios cadastrados' }),
+        criar('p', { classe: 'vazio', texto: 'Nenhum funcionario cadastrado neste setor ainda.' }),
+        criar('button', {
+          classe: 'btn btn-secundario btn-largo',
+          type: 'button',
+          texto: 'Primeiro acesso / nao estou na lista',
+          onClick: passoCadastro,
+        }),
+      ]);
+      return;
+    }
+
+    const listaEl = criar('ul', { classe: 'lista-funcionarios' });
+    const semResultado = criar('p', {
+      classe: 'vazio',
+      hidden: true,
+      texto: 'Nenhum funcionario encontrado com esse termo.',
+    });
+
+    // Busca por nome ou matricula. O campo e opcional: a lista completa
+    // continua logo abaixo, entao quem tem o setor pequeno nao precisa digitar.
+    const campoBusca = criar('input', {
+      classe: 'campo campo-busca',
+      type: 'search',
+      autocomplete: 'off',
+      placeholder: 'Buscar por nome ou matricula',
+      'aria-label': 'Buscar funcionario por nome ou matricula',
+      'aria-controls': 'lista-funcionarios',
+    });
+    listaEl.id = 'lista-funcionarios';
+
+    const contador = criar('span', { classe: 'contador-busca' });
+
+    function desenharLista() {
+      const termo = semAcento(campoBusca.value.trim());
+
+      const filtrados = termo
+        ? estado.funcionarios.filter(
+            (f) => semAcento(f.nome).includes(termo) || f.matricula.includes(termo),
+          )
+        : estado.funcionarios;
+
+      preencher(
+        listaEl,
+        filtrados.map((funcionario) =>
+          criar('li', {}, [
+            criar(
+              'button',
+              { classe: 'item-funcionario', type: 'button', onClick: () => passoPin(funcionario) },
+              [
+                criar('span', { classe: 'if-nome', texto: funcionario.nome }),
+                criar('span', { classe: 'if-matricula', texto: funcionario.matricula }),
+              ],
+            ),
+          ]),
+        ),
+      );
+
+      semResultado.hidden = filtrados.length > 0;
+      contador.textContent = termo
+        ? `${filtrados.length} de ${estado.funcionarios.length}`
+        : `${estado.funcionarios.length} funcionario(s)`;
+    }
+
+    campoBusca.addEventListener('input', desenharLista);
+
+    // Se a busca deixou uma pessoa so, Enter ja entra no PIN dela.
+    campoBusca.addEventListener('keydown', (evento) => {
+      if (evento.key !== 'Enter') return;
+      evento.preventDefault();
+      const unico = listaEl.querySelectorAll('.item-funcionario');
+      if (unico.length === 1) unico[0].click();
+    });
 
     preencher(container, [
       cabecalhoPasso(`Setor: ${setor.nome}`, passoSetor),
       criar('h2', { classe: 'titulo-passo', texto: 'Funcionarios cadastrados' }),
-      lista,
+      campoBusca,
+      contador,
+      listaEl,
+      semResultado,
       criar('button', {
         classe: 'btn btn-secundario btn-largo',
         type: 'button',
@@ -97,6 +159,8 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
         onClick: passoCadastro,
       }),
     ]);
+
+    desenharLista();
   }
 
   /* ------------------------------------------------------------------ PIN */
@@ -268,6 +332,18 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
   }
 
   /* ---------------------------------------------------------------- Apoio */
+
+  /**
+   * Normaliza texto para busca: sem acento e em minusculas.
+   * Assim "Joao" encontra "João" e vice-versa - importante porque o cadastro
+   * e digitado por pessoas diferentes, com e sem acento.
+   */
+  function semAcento(texto) {
+    return (texto ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+  }
 
   function cabecalhoPasso(texto, aoVoltar) {
     return criar('div', { classe: 'passo-topo' }, [
