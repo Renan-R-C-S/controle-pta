@@ -1,0 +1,115 @@
+# =============================================================================
+# Aplica os scripts SQL do repositorio no banco do Supabase.
+#
+# Roda SOMENTE quando acionado a mao (aba Actions -> Run workflow). Nao dispara
+# em push de proposito: aplicar esquema no banco de producao e uma acao que voce
+# deve decidir conscientemente, nao um efeito colateral de um commit.
+#
+# PRE-REQUISITO - criar o segredo no repositorio:
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+#   Nome:  SUPABASE_DB_URL
+#   Valor: a URI de conexao "Session pooler" do seu projeto
+#          (Supabase -> Project Settings -> Database -> Connection string)
+#
+#   Use a do SESSION POOLER, nao a "Direct connection": os runners do GitHub so
+#   tem IPv4, e a conexao direta do Supabase e IPv6. O endereco correto tem a
+#   forma  postgresql://postgres.<ref>:<SENHA>@aws-0-<regiao>.pooler.supabase.com:5432/postgres
+# =============================================================================
+
+name: Aplicar SQL no Supabase
+
+on:
+  workflow_dispatch:
+    inputs:
+      incluir_dados_teste:
+        description: 'Carregar tambem os dados ficticios (04_seed.sql)?'
+        type: boolean
+        default: true
+      rodar_testes:
+        description: 'Rodar a bateria de testes (06) ao final?'
+        type: boolean
+        default: true
+
+jobs:
+  aplicar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir se o segredo foi configurado
+        env:
+          URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "::error::O segredo SUPABASE_DB_URL nao esta configurado."
+            echo "Settings -> Secrets and variables -> Actions -> New repository secret"
+            exit 1
+          fi
+          echo "Segredo encontrado."
+
+      - name: Verificar conexao
+        env:
+          URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: psql "$URL" -v ON_ERROR_STOP=1 -c "select version();"
+
+      # ON_ERROR_STOP=1 faz o job falhar no primeiro erro, em vez de seguir
+      # aplicando scripts sobre um esquema incompleto.
+      - name: 01 - Esquema (tabelas, constraints, gatilhos)
+        env:
+          URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: psql "$URL" -v ON_ERROR_STOP=1 -f sql/01_schema.sql
+
+      - name: 02 - Funcoes RPC (regras de negocio)
+        env:
+          URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: psql "$URL" -v ON_ERROR_STOP=1 -f sql/02_funcoes.sql
+
+      - name: 03 - RLS e privilegios
+        env:
+          URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: psql "$URL" -v ON_ERROR_STOP=1 -f sql/03_rls.sql
+
+      - name: 04 - Dados de teste
+        if: ${{ inputs.incluir_dados_teste }}
+        env:
+          URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: psql "$URL" -v ON_ERROR_STOP=1 -f sql/04_seed.sql
+
+      - name: Conferir o endurecimento de seguranca
+        env:
+          URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          echo "Privilegios diretos do papel anon (deve vir vazio):"
+          psql "$URL" -v ON_ERROR_STOP=1 -c \
+            "select table_name, privilege_type
+               from information_schema.role_table_grants
+              where grantee = 'anon' and table_schema = 'public';"
+
+          sobrando=$(psql "$URL" -tA -c \
+            "select count(*) from information_schema.role_table_grants
+              where grantee = 'anon' and table_schema = 'public';")
+          if [ "$sobrando" != "0" ]; then
+            echo "::error::O papel anon ainda tem $sobrando privilegio(s) direto(s) em tabelas."
+            exit 1
+          fi
+          echo "OK: nenhuma tabela acessivel diretamente pelo frontend."
+
+      # O 06 termina com um erro PROPOSITAL, que e como ele desfaz (rollback)
+      # tudo o que criou. Por isso o psql roda sem ON_ERROR_STOP e o veredito
+      # sai da leitura do relatorio, nao do codigo de saida.
+      - name: 06 - Bateria de testes das regras de negocio
+        if: ${{ inputs.rodar_testes }}
+        env:
+          URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          saida=$(psql "$URL" -f sql/06_testes.sql 2>&1 || true)
+          echo "$saida"
+          echo "$saida" >> "$GITHUB_STEP_SUMMARY"
+
+          if echo "$saida" | grep -q "FALHAS: 0"; then
+            echo "::notice::Todas as regras de negocio estao ativas no banco."
+          else
+            echo "::error::A bateria de testes acusou falhas - veja o relatorio acima."
+            exit 1
+          fi
