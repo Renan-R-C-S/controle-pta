@@ -10,11 +10,20 @@
  * o autor do agendamento e informacao obrigatoria (itens 3 e 20).
  */
 
-import { agendaDoDia, calendarioDoMes, cancelar, criar as criarAgendamento, detalhe, ocupacoesDe } from './agendamentos.js';
+import {
+  agendaDoDia, alterar as alterarAgendamento, calendarioDoMes, cancelar,
+  criar as criarAgendamento, detalhe, ocupacoesDe,
+} from './agendamentos.js';
+import {
+  configuracao, definirLimiteMatriculas, definirPapel, excluirFuncionario,
+  listarFuncionarios as adminListarFuncionarios, reativarFuncionario, rotuloPapel,
+  souAdmin, souMaster,
+} from './admin.js';
 import { diferencas, listar as listarAuditoria, rotuloAcao } from './auditoria.js';
 import { funcionarioLogado, sair, validarSessao } from './auth.js';
+import { montarPerfil } from './perfil-ui.js';
 import { montarCalendario } from './calendario.js';
-import { configuracaoPendente } from './config.js';
+import { APP, configuracaoPendente } from './config.js';
 import { criarFluxoLogin } from './login-ui.js';
 import { listarPtas } from './ptas.js';
 import { sincronizarRelogio } from './tempo.js';
@@ -83,10 +92,17 @@ async function iniciarPagina() {
 
 function atualizarBarraUsuario() {
   const funcionario = funcionarioLogado();
+
   $('#usuario-atual').textContent = funcionario
     ? `${funcionario.nome} • ${funcionario.setor}`
+      + (funcionario.admin ? ` • ${rotuloPapel(funcionario.papel)}` : '')
     : 'Visitante (somente consulta)';
+
   $('#btn-sair').hidden = !funcionario;
+  $('#btn-perfil').hidden = !funcionario;
+  // Esconder o botao e conveniencia, nao seguranca: quem chamar a funcao pelo
+  // console recebe SEM_PERMISSAO_ADMIN do banco do mesmo jeito.
+  $('#btn-admin').hidden = !souAdmin();
 }
 
 /**
@@ -321,30 +337,52 @@ function conteudoDetalhe(dados) {
     }
   }
 
-  // Cancelamento so aparece para o autor de uma programacao ainda ativa.
+  // Alterar e cancelar aparecem para o AUTOR da programacao e para qualquer
+  // ADMINISTRADOR. Quem decide de verdade e o banco, a cada chamada.
   const funcionario = funcionarioLogado();
-  if (
-    dados.tipo === 'AGENDAMENTO' &&
-    dados.status === 'AGENDADO' &&
-    funcionario &&
-    dados.matricula === funcionario.matricula
-  ) {
+  const souAutor = funcionario && dados.matricula === funcionario.matricula;
+
+  if (dados.tipo === 'AGENDAMENTO' && dados.status === 'AGENDADO' && (souAutor || souAdmin())) {
+    if (!souAutor) {
+      linhas.push(criar('p', {
+        classe: 'bloco-aviso',
+        texto: 'Voce esta agindo como administrador sobre a programacao de outra pessoa. '
+             + 'A alteracao fica registrada na auditoria com o seu nome.',
+      }));
+    }
+
     linhas.push(
+      criar('button', {
+        classe: 'btn btn-primario btn-largo',
+        type: 'button',
+        texto: 'Alterar horario',
+        onClick: () => {
+          fecharPainel();
+          abrirAlterarAgendamento(dados);
+        },
+      }),
       criar('button', {
         classe: 'btn btn-secundario btn-largo',
         type: 'button',
-        texto: 'Cancelar esta programacao',
+        texto: 'Excluir esta programacao',
         onClick: async (evento) => {
           const ok = await confirmar({
-            titulo: 'Cancelar programacao',
-            corpo: [criar('p', { texto: 'A programacao ficara registrada como CANCELADA no historico.' })],
-            textoOk: 'Cancelar programacao',
+            titulo: 'Excluir programacao',
+            corpo: [
+              criar('p', { texto: 'O horario sera liberado para outras pessoas.' }),
+              criar('p', {
+                classe: 'dica',
+                texto: 'A programacao continua visivel no historico, marcada como CANCELADA. '
+                     + 'Registros nao sao apagados fisicamente.',
+              }),
+            ],
+            textoOk: 'Excluir',
             textoCancelar: 'Voltar',
           });
           if (!ok) return;
           try {
             await comCarregamento(evento.currentTarget, () => cancelar(dados.id));
-            avisar('Programacao cancelada.', 'ok');
+            avisar('Programacao excluida.', 'ok');
             fecharPainel();
             await Promise.all([carregarMes(), carregarDia()]);
           } catch (erro) {
@@ -467,6 +505,7 @@ function abrirNovoAgendamento() {
   });
 
   preencher($('#novo-corpo'), formulario);
+  $('#tela-novo').querySelector('.titulo-passo').textContent = 'Nova programacao';
   mostrarTela('tela-novo');
   checarConflito();
 }
@@ -476,6 +515,79 @@ function bloco(rotulo, campo, id) {
     criar('label', { classe: 'rotulo', for: id, texto: rotulo }),
     campo,
   ]);
+}
+
+/**
+ * Altera data e horario de uma programacao existente.
+ * A PTA nao muda aqui: trocar de equipamento e outra programacao, nao um ajuste
+ * da mesma. Para isso, exclua esta e crie outra.
+ */
+function abrirAlterarAgendamento(dados) {
+  const [dia, mes, ano] = String(dados.data).split('/');
+  const dataIso = `${ano}-${mes}-${dia}`;
+
+  const campoData = criar('input', { classe: 'campo', id: 'alt-data', type: 'date', value: dataIso, min: estado.hoje });
+  const campoInicio = criar('input', { classe: 'campo', id: 'alt-inicio', type: 'time', value: dados.inicio_planejado });
+  const campoFim = criar('input', { classe: 'campo', id: 'alt-fim', type: 'time', value: dados.fim_planejado });
+
+  const botao = criar('button', { classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'SALVAR ALTERACAO' });
+
+  const formulario = criar('form', { classe: 'form-agendamento', novalidate: true }, [
+    criar('div', { classe: 'bloco-identidade' }, [
+      criar('div', {}, [criar('span', { classe: 'rotulo-mini', texto: 'PTA' }), criar('strong', { texto: dados.pta })]),
+      criar('div', {}, [criar('span', { classe: 'rotulo-mini', texto: 'Autor' }), criar('strong', { texto: dados.funcionario })]),
+      criar('div', {}, [criar('span', { classe: 'rotulo-mini', texto: 'Original' }),
+        criar('strong', { texto: `${dados.inicio_planejado}-${dados.fim_planejado}` })]),
+    ]),
+    bloco('Data', campoData, 'alt-data'),
+    criar('div', { classe: 'linha-campos' }, [
+      bloco('Inicio', campoInicio, 'alt-inicio'),
+      bloco('Fim', campoFim, 'alt-fim'),
+    ]),
+    criar('p', { classe: 'dica', texto: 'O horario anterior e o novo ficam registrados na auditoria.' }),
+    botao,
+    criar('button', {
+      classe: 'btn btn-texto',
+      type: 'button',
+      texto: 'Voltar ao calendario',
+      onClick: () => mostrarTela('tela-calendario'),
+    }),
+  ]);
+
+  formulario.addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+
+    if (!intervaloValido(campoInicio.value, campoFim.value)) {
+      avisar('O horario final deve ser posterior ao horario inicial.', 'erro');
+      return;
+    }
+
+    try {
+      await comCarregamento(botao, async () => {
+        await alterarAgendamento({
+          agendamentoId: dados.id,
+          data: campoData.value,
+          horaInicio: campoInicio.value,
+          horaFim: campoFim.value,
+        });
+        avisar('Programacao alterada.', 'ok');
+
+        estado.diaSelecionado = campoData.value;
+        const [a, m] = campoData.value.split('-').map(Number);
+        estado.ano = a;
+        estado.mes = m;
+
+        await Promise.all([carregarMes(), carregarDia()]);
+        mostrarTela('tela-calendario');
+      });
+    } catch (erro) {
+      tratarErro(erro);
+    }
+  });
+
+  preencher($('#novo-corpo'), formulario);
+  $('#tela-novo').querySelector('.titulo-passo').textContent = 'Alterar programacao';
+  mostrarTela('tela-novo');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -579,6 +691,248 @@ async function abrirAuditoria() {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Meu perfil                                                                  */
+/* -------------------------------------------------------------------------- */
+
+function abrirPerfil() {
+  mostrarTela('tela-perfil');
+  montarPerfil($('#perfil-container'), {
+    aoAlterar: () => {
+      atualizarBarraUsuario();
+      carregarDia();
+    },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Administracao                                                               */
+/* -------------------------------------------------------------------------- */
+
+async function abrirAdmin() {
+  mostrarTela('tela-admin');
+  preencher($('#admin-corpo'), criar('p', { classe: 'carregando-texto', texto: 'Carregando...' }));
+
+  let config;
+  let pessoas;
+  try {
+    [config, pessoas] = await Promise.all([configuracao(), adminListarFuncionarios()]);
+  } catch (erro) {
+    tratarErro(erro);
+    mostrarTela('tela-calendario');
+    return;
+  }
+
+  const listaEl = criar('ul', { classe: 'lista-registros' });
+  const busca = criar('input', {
+    classe: 'campo campo-busca',
+    type: 'search',
+    autocomplete: 'off',
+    placeholder: 'Buscar por nome ou matricula',
+    'aria-label': 'Buscar funcionario',
+  });
+
+  const desenhar = () => {
+    const termo = busca.value.trim().toLowerCase();
+    const filtrados = termo
+      ? pessoas.filter(
+          (p) => p.nome.toLowerCase().includes(termo) || p.matricula.includes(termo),
+        )
+      : pessoas;
+    preencher(listaEl, filtrados.length
+      ? filtrados.map(linhaFuncionario)
+      : criar('li', {}, [criar('p', { classe: 'vazio', texto: 'Nenhum funcionario encontrado.' })]));
+  };
+  busca.addEventListener('input', desenhar);
+
+  preencher($('#admin-corpo'), [
+    cartaoConfiguracao(config),
+    criar('h3', { classe: 'secao', texto: `Funcionarios (${pessoas.length})` }),
+    busca,
+    listaEl,
+  ]);
+  desenhar();
+}
+
+/** Cartao de limite de matriculas. Somente o ADMIN_MASTER pode alterar. */
+function cartaoConfiguracao(config) {
+  const semLimite = config.limite_matriculas === 0;
+
+  const resumo = criar('div', { classe: 'bloco-identidade' }, [
+    criar('div', {}, [
+      criar('span', { classe: 'rotulo-mini', texto: 'Ativos' }),
+      criar('strong', { texto: String(config.ativos) }),
+    ]),
+    criar('div', {}, [
+      criar('span', { classe: 'rotulo-mini', texto: 'Limite' }),
+      criar('strong', { texto: semLimite ? 'sem limite' : String(config.limite_matriculas) }),
+    ]),
+    criar('div', {}, [
+      criar('span', { classe: 'rotulo-mini', texto: 'Vagas' }),
+      criar('strong', { texto: config.vagas === null ? '—' : String(config.vagas) }),
+    ]),
+  ]);
+
+  const reservadas = config.matriculas_reservadas?.length
+    ? criar('div', { classe: 'bloco-aviso' }, [
+        criar('strong', { texto: 'Matriculas administrativas reservadas' }),
+        criar(
+          'ul',
+          { classe: 'lista-simples' },
+          config.matriculas_reservadas.map((r) =>
+            criar('li', {
+              texto: `${r.matricula} — ${rotuloPapel(r.papel)}${
+                r.cadastrada ? ' (ja cadastrada)' : ' — AINDA NAO CADASTRADA'
+              }`,
+            }),
+          ),
+        ),
+        criar('p', {
+          classe: 'dica',
+          texto: 'Quem cadastrar primeiro uma destas matriculas assume o papel. '
+               + 'Garanta que sejam as pessoas certas antes de liberar o QR Code.',
+        }),
+      ])
+    : null;
+
+  if (!config.pode_alterar_limite) {
+    return criar('div', {}, [
+      criar('h3', { classe: 'secao', texto: 'Limite de matriculas' }),
+      resumo,
+      criar('p', { classe: 'dica', texto: 'Somente o administrador principal altera este limite.' }),
+      reservadas,
+    ]);
+  }
+
+  const campo = criar('input', {
+    classe: 'campo',
+    id: 'limite-matriculas',
+    type: 'number',
+    min: '0',
+    step: '1',
+    value: String(config.limite_matriculas),
+  });
+
+  const botao = criar('button', { classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'SALVAR LIMITE' });
+
+  const formulario = criar('form', { classe: 'form-limite', novalidate: true }, [
+    criar('label', { classe: 'rotulo', for: 'limite-matriculas', texto: 'Maximo de funcionarios ativos' }),
+    campo,
+    criar('p', { classe: 'dica', texto: 'Use 0 para nao ter limite. Excluir um funcionario libera vaga.' }),
+    botao,
+  ]);
+
+  formulario.addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    try {
+      await comCarregamento(botao, async () => {
+        const r = await definirLimiteMatriculas(Number(campo.value));
+        avisar(
+          r.limite === 0
+            ? 'Limite removido: cadastros liberados.'
+            : `Limite definido em ${r.limite} (${r.ativos} ativos).`,
+          'ok',
+        );
+        await abrirAdmin();
+      });
+    } catch (erro) {
+      tratarErro(erro);
+    }
+  });
+
+  return criar('div', {}, [
+    criar('h3', { classe: 'secao', texto: 'Limite de matriculas' }),
+    resumo,
+    formulario,
+    reservadas,
+  ]);
+}
+
+/** Uma linha da lista de funcionarios, com as acoes permitidas ao papel atual. */
+function linhaFuncionario(pessoa) {
+  const eu = funcionarioLogado();
+  const souEu = pessoa.id === eu?.id;
+  const master = pessoa.papel === 'ADMIN_MASTER';
+  const acoes = [];
+
+  if (pessoa.ativo && !master && !souEu) {
+    if (pessoa.papel === 'FUNCIONARIO') {
+      acoes.push(botaoAcao('Tornar administrador', async () => {
+        await definirPapel(pessoa.id, 'ADMIN');
+        avisar(`${pessoa.nome} agora e administrador.`, 'ok');
+      }));
+    } else if (pessoa.papel === 'ADMIN' && souMaster()) {
+      acoes.push(botaoAcao('Remover administrador', async () => {
+        await definirPapel(pessoa.id, 'FUNCIONARIO');
+        avisar(`${pessoa.nome} voltou a ser funcionario comum.`, 'ok');
+      }));
+    }
+
+    acoes.push(botaoAcao('Excluir', async () => {
+      const ok = await confirmar({
+        titulo: `Excluir ${pessoa.nome}?`,
+        corpo: [
+          criar('p', { texto: 'O funcionario deixa de aparecer na lista e nao consegue mais entrar. '
+                            + 'As programacoes futuras dele sao canceladas e a vaga e liberada.' }),
+          criar('p', { classe: 'dica', texto: 'Os usos e a auditoria dele permanecem: o historico do '
+                                            + 'sistema nao pode ser apagado por ninguem.' }),
+        ],
+        textoOk: 'Excluir',
+        textoCancelar: 'Voltar',
+      });
+      if (!ok) return false;
+      const r = await excluirFuncionario(pessoa.id);
+      avisar(
+        r.agendamentos_cancelados > 0
+          ? `${pessoa.nome} excluido. ${r.agendamentos_cancelados} programacao(oes) cancelada(s).`
+          : `${pessoa.nome} excluido.`,
+        'ok',
+      );
+      return true;
+    }, 'perigo'));
+  }
+
+  if (!pessoa.ativo) {
+    acoes.push(botaoAcao('Reativar', async () => {
+      await reativarFuncionario(pessoa.id);
+      avisar(`${pessoa.nome} reativado.`, 'ok');
+    }));
+  }
+
+  return criar('li', { classe: pessoa.ativo ? 'registro' : 'registro inativo' }, [
+    criar('div', { classe: 'registro-topo' }, [
+      criar('strong', { texto: pessoa.nome + (souEu ? ' (voce)' : '') }),
+      criar('span', { classe: `etiqueta papel-${pessoa.papel.toLowerCase()}`, texto: rotuloPapel(pessoa.papel) }),
+    ]),
+    criar('span', {
+      classe: 'registro-horas',
+      texto: `Matricula ${pessoa.matricula} • ${pessoa.setor}`
+           + (pessoa.ultimo_login ? ` • ultimo acesso ${pessoa.ultimo_login}` : ' • nunca acessou'),
+    }),
+    pessoa.ativo ? null : criar('span', { classe: 'registro-horas forte', texto: 'EXCLUIDO (inativo)' }),
+    acoes.length ? criar('div', { classe: 'acoes-linha' }, acoes) : null,
+  ]);
+}
+
+/** Botao de acao que recarrega a tela quando a operacao muda alguma coisa. */
+function botaoAcao(texto, acao, variante) {
+  return criar('button', {
+    classe: `btn btn-texto${variante === 'perigo' ? ' btn-perigo' : ''}`,
+    type: 'button',
+    texto,
+    onClick: async (evento) => {
+      try {
+        await comCarregamento(evento.currentTarget, async () => {
+          const seguiu = await acao();
+          if (seguiu !== false) await abrirAdmin();
+        });
+      } catch (erro) {
+        tratarErro(erro);
+      }
+    },
+  });
+}
+
+/* -------------------------------------------------------------------------- */
 /* Apoio                                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -605,6 +959,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#btn-novo').addEventListener('click', () => exigirLogin(abrirNovoAgendamento));
   $('#btn-historico').addEventListener('click', abrirHistorico);
   $('#btn-auditoria').addEventListener('click', abrirAuditoria);
+  $('#btn-perfil').addEventListener('click', () => exigirLogin(abrirPerfil));
+  $('#btn-admin').addEventListener('click', () => exigirLogin(abrirAdmin));
   $('#btn-hoje').addEventListener('click', () => {
     estado.diaSelecionado = estado.hoje;
     const [ano, mes] = estado.hoje.split('-').map(Number);
@@ -624,6 +980,25 @@ document.addEventListener('DOMContentLoaded', () => {
   for (const botao of document.querySelectorAll('[data-voltar-calendario]')) {
     botao.addEventListener('click', () => mostrarTela('tela-calendario'));
   }
+
+  // O calendario e uma leitura ao vivo do banco, mas a tela so consultava ao
+  // abrir. Quem deixasse esta pagina aberta e fosse iniciar um uso pelo QR Code
+  // 1, ao voltar continuaria vendo a situacao antiga - dando a impressao de que
+  // o uso nao tinha entrado na programacao. Reconsultamos ao reexibir a aba.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (!$('#tela-calendario')?.classList.contains('ativa')) return;
+    carregarMes();
+    carregarDia();
+  });
+
+  // Enquanto a agenda fica visivel, acompanha usos que comecam ou terminam
+  // agora - util no quadro de avisos, onde a tela fica aberta o tempo todo.
+  setInterval(() => {
+    if (document.hidden) return;
+    if (!$('#tela-calendario')?.classList.contains('ativa')) return;
+    carregarDia();
+  }, APP.intervaloAtualizacao);
 
   iniciarPagina();
 });
