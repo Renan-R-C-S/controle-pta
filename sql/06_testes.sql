@@ -954,6 +954,149 @@ begin
   if v_erro = 'REGISTRO_DO_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'desativou!') || E'\n'; end if;
 
+  v_rel := v_rel || E'\n-- NORMALIZACAO DE MATRICULA ------------------------\n';
+
+  -- ===========================================================================
+  -- MATRICULA CURTA GANHA ZEROS A ESQUERDA
+  --
+  -- Os alvos ('0590', '0020', '0005') sao valores reais e curtos, entao podem
+  -- ja existir no banco de quem roda os testes. Nesse caso o teste e pulado com
+  -- aviso, em vez de acusar uma falha que nao e do codigo.
+  -- ===========================================================================
+
+  -- T94 '590' -> '0590'
+  v_desc := 'T94 matricula 590 e gravada como 0590'; v_erro := null;
+  if exists (select 1 from public.funcionarios where matricula = '0590') then
+    v_ok := v_ok + 1;
+    v_rel := v_rel || '  [OK]    ' || v_desc || ' (pulado: 0590 ja cadastrada)' || E'\n';
+  else
+    begin
+      v_r := public.fn_cadastrar_funcionario('Teste Zeros A', '590', '1234', v_setor);
+      select matricula into v_txt from public.funcionarios
+       where id = (v_r->'funcionario'->>'id')::uuid;
+    exception when others then v_erro := sqlerrm; end;
+    if v_erro is null and v_txt = '0590' then
+      v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+    else
+      v_falha := v_falha + 1;
+      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+    end if;
+  end if;
+
+  -- T95 '20' -> '0020'
+  v_desc := 'T95 matricula 20 e gravada como 0020'; v_erro := null;
+  if exists (select 1 from public.funcionarios where matricula = '0020') then
+    v_ok := v_ok + 1;
+    v_rel := v_rel || '  [OK]    ' || v_desc || ' (pulado: 0020 ja cadastrada)' || E'\n';
+  else
+    begin
+      v_r := public.fn_cadastrar_funcionario('Teste Zeros B', '20', '1234', v_setor);
+      select matricula into v_txt from public.funcionarios
+       where id = (v_r->'funcionario'->>'id')::uuid;
+    exception when others then v_erro := sqlerrm; end;
+    if v_erro is null and v_txt = '0020' then
+      v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+    else
+      v_falha := v_falha + 1;
+      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+    end if;
+  end if;
+
+  -- T96 um unico digito tambem completa
+  v_desc := 'T96 matricula 5 e gravada como 0005'; v_erro := null;
+  if exists (select 1 from public.funcionarios where matricula = '0005') then
+    v_ok := v_ok + 1;
+    v_rel := v_rel || '  [OK]    ' || v_desc || ' (pulado: 0005 ja cadastrada)' || E'\n';
+  else
+    begin
+      v_r := public.fn_cadastrar_funcionario('Teste Zeros C', '5', '1234', v_setor);
+      select matricula into v_txt from public.funcionarios
+       where id = (v_r->'funcionario'->>'id')::uuid;
+    exception when others then v_erro := sqlerrm; end;
+    if v_erro is null and v_txt = '0005' then
+      v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+    else
+      v_falha := v_falha + 1;
+      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+    end if;
+  end if;
+
+  -- T97 matricula longa NAO pode ser truncada.
+  -- Este e o teste que protege contra o lpad do Postgres, que corta quando o
+  -- texto ja e maior que o tamanho pedido.
+  v_desc := 'T97 matricula com mais de 4 digitos nao e truncada'; v_erro := null;
+  begin
+    v_r := public.fn_cadastrar_funcionario('Teste Zeros D', '900777', '1234', v_setor);
+    select matricula into v_txt from public.funcionarios
+     where id = (v_r->'funcionario'->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_txt = '900777' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else
+    v_falha := v_falha + 1;
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+  end if;
+
+  -- T98 exatamente 4 digitos passa intacta
+  v_desc := 'T98 matricula de 4 digitos passa sem alteracao'; v_erro := null;
+  begin
+    v_r := public.fn_cadastrar_funcionario('Teste Zeros E', '9078', '1234', v_setor);
+    select matricula into v_txt from public.funcionarios
+     where id = (v_r->'funcionario'->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_txt = '9078' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else
+    v_falha := v_falha + 1;
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+  end if;
+
+  -- T99 depois de normalizar, a duplicidade continua sendo barrada.
+  -- '590' vira '0590', que o T94 acabou de criar (ou que ja existia no banco,
+  -- caso o T94 tenha sido pulado). Nos dois caminhos o resultado e o mesmo.
+  v_desc := 'T99 forma curta de uma matricula ja existente e recusada'; v_erro := null;
+  begin perform public.fn_cadastrar_funcionario('Teste Zeros F', '590', '1234', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'MATRICULA_DUPLICADA' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else
+    v_falha := v_falha + 1;
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n';
+  end if;
+
+  -- T100 texto que nao e numero continua recusado
+  v_desc := 'T100 matricula com letra continua recusada'; v_erro := null;
+  begin perform public.fn_cadastrar_funcionario('Teste Zeros G', '59A', '1234', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'MATRICULA_FORMATO' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else
+    v_falha := v_falha + 1;
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n';
+  end if;
+
+  -- T101 matricula vazia continua recusada
+  v_desc := 'T101 matricula vazia continua recusada'; v_erro := null;
+  begin perform public.fn_cadastrar_funcionario('Teste Zeros H', '   ', '1234', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'MATRICULA_FORMATO' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else
+    v_falha := v_falha + 1;
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n';
+  end if;
+
+  -- T102 acima de 10 digitos continua recusado
+  v_desc := 'T102 matricula com mais de 10 digitos continua recusada'; v_erro := null;
+  begin perform public.fn_cadastrar_funcionario('Teste Zeros I', '12345678901', '1234', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'MATRICULA_FORMATO' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else
+    v_falha := v_falha + 1;
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n';
+  end if;
+
   -- ===========================================================================
   -- RELATORIO
   -- ===========================================================================

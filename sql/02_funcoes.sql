@@ -203,8 +203,19 @@ begin
     raise exception 'NOME_INVALIDO' using errcode = 'P0001';
   end if;
 
-  if v_matr !~ '^[0-9]{4,10}$' then
+  if v_matr !~ '^[0-9]{1,10}$' then
     raise exception 'MATRICULA_FORMATO' using errcode = 'P0001';
+  end if;
+
+  -- Matricula curta ganha zeros a esquerda: '590' vira '0590', '20' vira '0020'.
+  -- A normalizacao mora aqui, no banco, e nao apenas na tela: assim vale para
+  -- qualquer caminho de cadastro, inclusive uma chamada direta ao RPC.
+  --
+  -- O teste de comprimento e necessario: lpad TRUNCA quando o texto ja e maior
+  -- que o tamanho pedido, entao lpad('12345', 4, '0') devolveria '1234' e
+  -- silenciosamente trocaria a matricula da pessoa.
+  if char_length(v_matr) < 4 then
+    v_matr := lpad(v_matr, 4, '0');
   end if;
 
   -- REGRA 2
