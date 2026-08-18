@@ -29,7 +29,15 @@ declare
   v_token      uuid;
   v_resultado  jsonb;
   v_afetados   int;
+  -- O MVP so aceita uso terminando no mesmo dia. Limitar o alvo a 23:59 de hoje
+  -- deixa a demonstracao funcionar a qualquer hora, sem virar a data.
+  v_local      timestamp;
+  v_fim        time;
 begin
+  v_local := now() at time zone public.fn_tz();
+  v_fim   := least(v_local + interval '100 minutes',
+                   v_local::date + time '23:59')::time;
+
   select id into v_carlos_id from public.funcionarios where matricula = '10003';
   if v_carlos_id is null then
     raise exception 'Execute o arquivo 04_seed.sql antes deste script.';
@@ -52,7 +60,7 @@ begin
   v_resultado := public.fn_uso_iniciar(
     v_token,
     'PTA-003',
-    (to_char(now() at time zone public.fn_tz() + interval '100 minutes', 'HH24:MI'))::time);
+    v_fim);
 
   v_afetados := (v_resultado->>'agendamentos_afetados')::int;
 

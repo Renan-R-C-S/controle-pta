@@ -11,10 +11,9 @@
 -- Se aparecer alguma linha [FALHA], a regra correspondente nao esta ativa.
 --
 -- QUANDO RODAR
--- Varios testes iniciam usos que terminam 1 a 2 horas depois do horario atual.
--- Como o MVP trabalha com uso dentro do mesmo dia (ver docs/DECISOES.md), rodar
--- este script depois das 21h faz esses casos falharem por virada de data - o
--- que e comportamento correto do sistema, nao defeito. Rode durante o dia.
+-- A qualquer hora. Os testes que iniciam usos limitam o horario de termino a
+-- 23:59 do proprio dia, entao a virada de data nao os afeta. A unica excecao e
+-- rodar no ultimo minuto do dia, quando nao sobra horario futuro nenhum.
 -- =============================================================================
 
 -- O search_path abaixo garante que as classes de operador do btree_gist e as
@@ -40,11 +39,33 @@ declare
   v_ag_hoje  uuid;
   v_amanha   date := (now() at time zone public.fn_tz())::date + 1;
   v_ontem    date := (now() at time zone public.fn_tz())::date - 1;
+
+  -- Horarios de fim usados pelos testes de uso imediato.
+  --
+  -- O MVP so aceita uso terminando no mesmo dia (docs/DECISOES.md, item 5).
+  -- Se o teste pedisse cegamente "daqui a 90 minutos", rodar as 22h30 geraria
+  -- 00:05 - um horario ja passado - e uma duzia de testes que nada tem a ver
+  -- com data falhariam em efeito domino.
+  --
+  -- Por isso o alvo e limitado a 23:59 de hoje: continua sendo um horario
+  -- futuro e valido a qualquer hora, e os testes medem o que se propoem a
+  -- medir. Quem verifica a recusa de horario passado e o T13, de proposito.
+  v_local     timestamp;
+  v_ultima    timestamp;
+  v_fim_60    time;
+  v_fim_90    time;
+  v_fim_120   time;
   v_i        int;
   v_txt      text;
   v_bool     boolean;
   v_int      int;
 begin
+  v_local   := now() at time zone public.fn_tz();
+  v_ultima  := v_local::date + time '23:59';
+  v_fim_60  := least(v_local + interval '60 minutes',  v_ultima)::time;
+  v_fim_90  := least(v_local + interval '90 minutes',  v_ultima)::time;
+  v_fim_120 := least(v_local + interval '120 minutes', v_ultima)::time;
+
   -- ===========================================================================
   -- PREPARACAO (tudo sera desfeito no final)
   -- ===========================================================================
@@ -185,7 +206,7 @@ begin
   v_desc := 'T14 inicio de uso pelo QR Code 1'; v_erro := null;
   begin
     v_r := public.fn_uso_iniciar(v_ta, 'PTA-901',
-      (to_char(now() at time zone public.fn_tz() + interval '90 minutes', 'HH24:MI'))::time);
+      v_fim_90);
     v_uso_a := (v_r->>'uso_id')::uuid;
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and v_uso_a is not null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
@@ -201,7 +222,7 @@ begin
   v_desc := 'T16 segundo uso na mesma PTA e bloqueado'; v_erro := null;
   begin
     perform public.fn_uso_iniciar(v_tb, 'PTA-901',
-      (to_char(now() at time zone public.fn_tz() + interval '2 hours', 'HH24:MI'))::time);
+      v_fim_120);
   exception when others then v_erro := sqlerrm; end;
   if v_erro = 'PTA_EM_USO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
@@ -210,7 +231,7 @@ begin
   v_desc := 'T17 usuario com uso aberto nao inicia outro'; v_erro := null;
   begin
     perform public.fn_uso_iniciar(v_ta, 'PTA-902',
-      (to_char(now() at time zone public.fn_tz() + interval '2 hours', 'HH24:MI'))::time);
+      v_fim_120);
   exception when others then v_erro := sqlerrm; end;
   if v_erro = 'USUARIO_COM_USO_ABERTO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
@@ -273,7 +294,7 @@ begin
   v_desc := 'T25 finalizacao apos o previsto e registrada como ultrapassagem'; v_erro := null;
   begin
     v_r := public.fn_uso_iniciar(v_ta, 'PTA-902',
-      (to_char(now() at time zone public.fn_tz() + interval '60 minutes', 'HH24:MI'))::time);
+      v_fim_60);
     v_uso_b := (v_r->>'uso_id')::uuid;
     -- simula um uso que comecou ha 2 horas e deveria ter terminado ha 1 hora
     update public.usos
@@ -358,7 +379,7 @@ begin
   v_desc := 'T33 uso imediato do QR1 prevalece sobre o agendamento do QR2'; v_erro := null;
   begin
     v_r := public.fn_uso_iniciar(v_ta, 'PTA-903',
-      (to_char(now() at time zone public.fn_tz() + interval '120 minutes', 'HH24:MI'))::time);
+      v_fim_120);
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and (v_r->>'agendamentos_afetados')::int = 1 then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
