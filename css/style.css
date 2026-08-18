@@ -537,7 +537,15 @@ pre {
 .cartao.uso-finalizado { border-left-color: var(--verde); }
 .cartao.concluido { border-left-color: var(--verde); }
 .cartao.sobrescrito { border-left-color: var(--vermelho); background: var(--vermelho-claro); }
-.cartao.cancelado { border-left-color: var(--cinza-500); opacity: .7; }
+/* Cancelado continua no cronograma, mas recuado: cinza, sem cor de destaque,
+   e com a etiqueta CANCELADA. Some da atencao sem sumir do historico. */
+.cartao.cancelado {
+  border-left-color: var(--cinza-500);
+  background: var(--cinza-100);
+  opacity: .6;
+}
+.cartao.cancelado .horas-principal { text-decoration: line-through; }
+.cartao.cancelado:hover { opacity: .85; }
 
 .cartao-topo { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .375rem; }
 .cartao-pta { font-size: 1.0625rem; }
@@ -676,3 +684,64 @@ pre {
   .tela { display: block !important; }
   body { background: #fff; }
 }
+
+
+/* ------------------------------------------------------------- Terceiros */
+/* O nome do terceiro sai em negrito ao lado do colaborador que o incluiu:
+   "Joao Silva / Alfa Montagens" */
+.pessoa-terceiro { display: inline; }
+.terceiro-inline { font-weight: 700; color: var(--azul); }
+@media (prefers-color-scheme: dark) { .terceiro-inline { color: #7fb6ff; } }
+.cartao.cancelado .terceiro-inline { color: inherit; }
+
+.bloco-terceiro { margin: 1rem 0; }
+.btn-terceiro { margin-top: 0; }
+
+.terceiro-painel {
+  margin-top: .75rem;
+  padding: .875rem;
+  border: 1px dashed var(--borda);
+  border-radius: var(--raio);
+  background: var(--cinza-100);
+}
+.terceiro-painel .campo { margin-bottom: .5rem; }
+
+.terceiro-resumo {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  margin-top: .625rem;
+  padding: .75rem 1rem;
+  background: var(--azul-claro);
+  border-radius: var(--raio-pequeno);
+}
+.terceiro-nome { font-size: 1.0625rem; }
+.terceiro-resumo .btn-texto { align-self: flex-start; }
+
+.lista-terceiros { max-height: 240px; overflow-y: auto; }
+
+/* ------------------------------------------------- Agendamentos ciclicos */
+.area-ciclicos { margin-top: 1.5rem; }
+.cartao-etiquetas { display: inline-flex; gap: .375rem; flex-wrap: wrap; justify-content: flex-end; }
+.et-ciclico { background: var(--azul-claro); color: var(--azul); border-color: var(--azul); }
+
+.grupo-radio { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: .75rem; }
+.rotulo-radio { display: inline-flex; align-items: center; gap: .375rem; font-size: .9375rem; cursor: pointer; }
+.rotulo-radio input { width: 20px; height: 20px; }
+
+.grade-dias { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+.rotulo-dia {
+  display: inline-flex;
+  align-items: center;
+  gap: .375rem;
+  min-height: 44px;
+  padding: .5rem .75rem;
+  border: 2px solid var(--borda);
+  border-radius: var(--raio-pequeno);
+  background: var(--superficie);
+  font-size: .875rem;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.rotulo-dia:has(.cx-dia:checked) { border-color: var(--azul); background: var(--azul-claro); font-weight: 700; }
+.cx-dia { width: 18px; height: 18px; }

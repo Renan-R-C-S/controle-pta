@@ -19,7 +19,7 @@ import { rpc } from './api.js';
 import { funcionarioLogado, tokenAtual } from './auth.js';
 
 export const PAPEIS = {
-  FUNCIONARIO: 'Funcionario',
+  FUNCIONARIO: 'Colaborador',
   ADMIN: 'Administrador',
   ADMIN_MASTER: 'Administrador principal',
 };
@@ -80,7 +80,29 @@ export async function configuracao() {
   return rpc('fn_admin_configuracao', { p_token: tokenAtual() });
 }
 
-/** Define o teto de funcionarios ativos. 0 = sem limite. Somente ADMIN_MASTER. */
+/**
+ * Cancela um uso que ficou aberto e esquecido.
+ * NAO e finalizar: o registro fica sem fim_efetivo, porque ninguem observou o
+ * fim real. Inventar um horario corromperia justamente o dado que o sistema
+ * existe para guardar.
+ */
+export async function cancelarUso(usoId, motivo = null) {
+  return rpc('fn_admin_cancelar_uso', {
+    p_token: tokenAtual(),
+    p_uso_id: usoId,
+    p_motivo: motivo?.trim() || null,
+  });
+}
+
+/** Teto de horas de um uso em aberto (1 a 24). Qualquer ADMIN pode definir. */
+export async function definirMaxHorasUso(horas) {
+  return rpc('fn_admin_definir_max_horas_uso', {
+    p_token: tokenAtual(),
+    p_horas: horas,
+  });
+}
+
+/** Define o teto de colaboradores ativos. 0 = sem limite. Somente ADMIN_MASTER. */
 export async function definirLimiteMatriculas(limite) {
   return rpc('fn_admin_definir_limite_matriculas', {
     p_token: tokenAtual(),

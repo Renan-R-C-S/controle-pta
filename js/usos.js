@@ -17,13 +17,14 @@ import { ErroApp } from './erros.js';
  * @param {string} codigoPta   codigo lido do QR Code
  * @param {string} horaFim     "HH:MM" pretendido, informado pelo funcionario
  */
-export async function iniciar(codigoPta, horaFim) {
+export async function iniciar(codigoPta, horaFim, fornecedorId = null) {
   if (!/^\d{2}:\d{2}$/.test(horaFim ?? '')) throw new ErroApp('HORARIO_INVALIDO');
 
   return rpc('fn_uso_iniciar', {
     p_token: tokenAtual(),
     p_pta_codigo: codigoPta,
     p_fim_pretendido: horaFim,
+    p_fornecedor_id: fornecedorId,
   });
 }
 

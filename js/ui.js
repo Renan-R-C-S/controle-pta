@@ -164,7 +164,7 @@ export function fecharPainel() {
 export const ROTULOS_STATUS = {
   AGENDADO: 'Agendado',
   SOBRESCRITO: 'Sobrescrito',
-  CANCELADO: 'Cancelado',
+  CANCELADO: 'Cancelada',
   CONCLUIDO: 'Concluido',
   AFETADO_POR_USO_IMEDIATO: 'Afetado por uso imediato',
   EM_USO: 'Em uso',
@@ -183,4 +183,19 @@ export function classeStatus(status) {
 
 export function etiqueta(status) {
   return criar('span', { classe: classeStatus(status), texto: rotuloStatus(status) });
+}
+
+/**
+ * Nome do colaborador seguido do terceiro que ele incluiu:
+ *     "Joao Silva / Alfa Montagens"
+ * O terceiro sai em negrito, para ficar evidente que a PTA foi usada com apoio
+ * externo. Sem terceiro, devolve apenas o nome.
+ */
+export function pessoaComTerceiro(nome, fornecedor) {
+  const partes = [String(nome ?? '')];
+  if (fornecedor) {
+    partes.push(' / ');
+    partes.push(criar('strong', { classe: 'terceiro-inline', texto: fornecedor }));
+  }
+  return criar('span', { classe: 'pessoa-terceiro' }, partes);
 }

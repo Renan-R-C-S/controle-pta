@@ -15,10 +15,15 @@ import {
   criar as criarAgendamento, detalhe, ocupacoesDe,
 } from './agendamentos.js';
 import {
-  configuracao, definirLimiteMatriculas, definirPapel, excluirFuncionario,
-  listarFuncionarios as adminListarFuncionarios, reativarFuncionario, rotuloPapel,
-  souAdmin, souMaster,
+  cancelarUso, configuracao, definirLimiteMatriculas, definirMaxHorasUso, definirPapel,
+  excluirFuncionario, listarFuncionarios as adminListarFuncionarios, reativarFuncionario,
+  rotuloPapel, souAdmin, souMaster,
 } from './admin.js';
+import {
+  DIAS, criar as criarCiclico, desativar as desativarCiclico, descreverRegra,
+  estender as estenderCiclico, listar as listarCiclicos,
+} from './ciclicos.js';
+import { criarSeletorTerceiro } from './fornecedor-ui.js';
 import { diferencas, listar as listarAuditoria, rotuloAcao } from './auditoria.js';
 import { funcionarioLogado, sair, validarSessao } from './auth.js';
 import { montarPerfil } from './perfil-ui.js';
@@ -29,7 +34,7 @@ import { listarPtas } from './ptas.js';
 import { sincronizarRelogio } from './tempo.js';
 import {
   $, abrirPainel, avisar, carregandoGlobal, comCarregamento, confirmar, criar, etiqueta, fecharPainel,
-  mostrarTela, preencher, tratarErro,
+  mostrarTela, pessoaComTerceiro, preencher, tratarErro,
 } from './ui.js';
 import { historico } from './usos.js';
 import { conflitaCom, intervaloValido } from './validacoes.js';
@@ -209,6 +214,7 @@ async function carregarDia() {
  */
 function classeDoItem(item) {
   if (item.tipo === 'USO') {
+    if (item.status === 'CANCELADO') return 'cartao cancelado';
     return item.status === 'EM_USO' ? 'cartao uso-andamento' : 'cartao uso-finalizado';
   }
   if (item.status === 'AGENDADO') return 'cartao agendamento';
@@ -230,7 +236,10 @@ function cartaoDeRegistro(item) {
     [
       criar('div', { classe: 'cartao-topo' }, [
         criar('strong', { classe: 'cartao-pta', texto: item.pta_codigo }),
-        etiqueta(item.status),
+        criar('span', { classe: 'cartao-etiquetas' }, [
+          item.ciclico ? criar('span', { classe: 'etiqueta et-ciclico', texto: 'Ciclico' }) : null,
+          etiqueta(item.status),
+        ]),
       ]),
       criar('div', { classe: 'cartao-horas' }, [
         criar('span', {
@@ -247,7 +256,7 @@ function cartaoDeRegistro(item) {
         }),
       ]),
       criar('div', { classe: 'cartao-pessoa' }, [
-        criar('span', { texto: item.funcionario }),
+        pessoaComTerceiro(item.funcionario, item.fornecedor),
         criar('span', { classe: 'cartao-setor', texto: `${item.setor} • ${item.matricula}` }),
       ]),
       item.observacao ? criar('p', { classe: 'cartao-obs', texto: item.observacao }) : null,
@@ -271,10 +280,17 @@ async function abrirDetalhe(tipo, id) {
 function conteudoDetalhe(dados) {
   const linhas = [
     linha('PTA', dados.pta),
-    linha('Funcionario', `${dados.funcionario} (${dados.matricula})`),
+    linha('Colaborador', `${dados.funcionario} (${dados.matricula})`),
     linha('Setor', dados.setor),
     linha('Data', dados.data),
   ];
+
+  if (dados.fornecedor) {
+    linhas.push(criar('div', { classe: 'linha-detalhe' }, [
+      criar('span', { classe: 'rotulo-mini', texto: 'Terceiro incluido' }),
+      criar('strong', { classe: 'terceiro-inline', texto: dados.fornecedor }),
+    ]));
+  }
 
   if (dados.tipo === 'AGENDAMENTO') {
     linhas.push(
@@ -311,6 +327,46 @@ function conteudoDetalhe(dados) {
     );
     if (dados.ultrapassou_previsto) {
       linhas.push(criar('p', { classe: 'alerta', texto: 'O uso ultrapassou o horario pretendido.' }));
+    }
+    if (dados.status === 'CANCELADO') {
+      linhas.push(criar('p', {
+        classe: 'bloco-aviso',
+        texto: `Cancelado pela administracao${dados.cancelado_por ? ` (${dados.cancelado_por})` : ''}. `
+             + `${dados.motivo_cancelamento ?? ''} Sem horario final efetivo: o encerramento real nao foi observado.`,
+      }));
+    }
+
+    // Um uso esquecido em aberto pode ser encerrado pela administracao.
+    if (dados.status === 'EM_USO' && souAdmin()) {
+      linhas.push(criar('button', {
+        classe: 'btn btn-secundario btn-largo btn-perigo',
+        type: 'button',
+        texto: 'Cancelar este uso em aberto',
+        onClick: async (evento) => {
+          const ok = await confirmar({
+            titulo: 'Cancelar uso em aberto',
+            corpo: [
+              criar('p', { texto: 'A PTA fica liberada e o registro passa a CANCELADA no cronograma.' }),
+              criar('p', {
+                classe: 'dica',
+                texto: 'Nenhum horario final efetivo sera gravado: ninguem observou o fim real, '
+                     + 'e inventar um horario corromperia o historico.',
+              }),
+            ],
+            textoOk: 'Cancelar uso',
+            textoCancelar: 'Voltar',
+          });
+          if (!ok) return;
+          try {
+            await comCarregamento(evento.currentTarget, () => cancelarUso(dados.id));
+            avisar('Uso cancelado.', 'ok');
+            fecharPainel();
+            await Promise.all([carregarMes(), carregarDia()]);
+          } catch (erro) {
+            tratarErro(erro);
+          }
+        },
+      }));
     }
     if (dados.observacao) {
       linhas.push(
@@ -451,6 +507,7 @@ function abrirNovoAgendamento() {
   }
 
   const botao = criar('button', { classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'AGENDAR' });
+  const terceiro = criarSeletorTerceiro();
 
   const formulario = criar('form', { classe: 'form-agendamento', novalidate: true }, [
     bloco('PTA', seletorPta, 'ag-pta'),
@@ -460,6 +517,7 @@ function abrirNovoAgendamento() {
       bloco('Fim', campoFim, 'ag-fim'),
     ]),
     avisoConflito,
+    terceiro.elemento,
     criar('p', {
       classe: 'dica',
       texto: 'Esta e uma PROGRAMACAO. O uso real e registrado pelo QR Code da propria PTA e tem prioridade sobre o que foi planejado.',
@@ -488,6 +546,7 @@ function abrirNovoAgendamento() {
           data: campoData.value,
           horaInicio: campoInicio.value,
           horaFim: campoFim.value,
+          fornecedorId: terceiro.valor(),
         });
         avisar(`Programacao criada: ${criado.pta} em ${criado.data}, ${criado.inicio} - ${criado.fim}.`, 'ok');
 
@@ -531,6 +590,10 @@ function abrirAlterarAgendamento(dados) {
   const campoFim = criar('input', { classe: 'campo', id: 'alt-fim', type: 'time', value: dados.fim_planejado });
 
   const botao = criar('button', { classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'SALVAR ALTERACAO' });
+  const terceiro = criarSeletorTerceiro({
+    selecionadoId: dados.fornecedor_id ?? null,
+    selecionadoNome: dados.fornecedor ?? null,
+  });
 
   const formulario = criar('form', { classe: 'form-agendamento', novalidate: true }, [
     criar('div', { classe: 'bloco-identidade' }, [
@@ -544,6 +607,7 @@ function abrirAlterarAgendamento(dados) {
       bloco('Inicio', campoInicio, 'alt-inicio'),
       bloco('Fim', campoFim, 'alt-fim'),
     ]),
+    terceiro.elemento,
     criar('p', { classe: 'dica', texto: 'O horario anterior e o novo ficam registrados na auditoria.' }),
     botao,
     criar('button', {
@@ -569,6 +633,7 @@ function abrirAlterarAgendamento(dados) {
           data: campoData.value,
           horaInicio: campoInicio.value,
           horaFim: campoFim.value,
+          fornecedorId: terceiro.valor(),
         });
         avisar('Programacao alterada.', 'ok');
 
@@ -611,7 +676,7 @@ async function abrirHistorico() {
         criar('tr', {}, [
           criar('th', { texto: 'Data' }),
           criar('th', { texto: 'PTA' }),
-          criar('th', { texto: 'Funcionario' }),
+          criar('th', { texto: 'Colaborador' }),
           criar('th', { texto: 'Previsto' }),
           criar('th', { texto: 'Efetivo' }),
           criar('th', { texto: 'Situacao' }),
@@ -728,7 +793,7 @@ async function abrirAdmin() {
     type: 'search',
     autocomplete: 'off',
     placeholder: 'Buscar por nome ou matricula',
-    'aria-label': 'Buscar funcionario',
+    'aria-label': 'Buscar colaborador',
   });
 
   const desenhar = () => {
@@ -740,17 +805,21 @@ async function abrirAdmin() {
       : pessoas;
     preencher(listaEl, filtrados.length
       ? filtrados.map(linhaFuncionario)
-      : criar('li', {}, [criar('p', { classe: 'vazio', texto: 'Nenhum funcionario encontrado.' })]));
+      : criar('li', {}, [criar('p', { classe: 'vazio', texto: 'Nenhum colaborador encontrado.' })]));
   };
   busca.addEventListener('input', desenhar);
 
+  const areaCiclicos = criar('div', { classe: 'area-ciclicos' });
+
   preencher($('#admin-corpo'), [
     cartaoConfiguracao(config),
-    criar('h3', { classe: 'secao', texto: `Funcionarios (${pessoas.length})` }),
+    areaCiclicos,
+    criar('h3', { classe: 'secao', texto: `Colaboradores (${pessoas.length})` }),
     busca,
     listaEl,
   ]);
   desenhar();
+  montarCiclicos(areaCiclicos, pessoas);
 }
 
 /** Cartao de limite de matriculas. Somente o ADMIN_MASTER pode alterar. */
@@ -770,6 +839,46 @@ function cartaoConfiguracao(config) {
       criar('span', { classe: 'rotulo-mini', texto: 'Vagas' }),
       criar('strong', { texto: config.vagas === null ? '—' : String(config.vagas) }),
     ]),
+  ]);
+
+  // Teto de horas de um uso em aberto: qualquer administrador define.
+  const campoHoras = criar('input', {
+    classe: 'campo', id: 'max-horas', type: 'number', min: '1', max: '24', step: '1',
+    value: String(config.max_horas_uso_aberto ?? 14),
+  });
+  const botaoHoras = criar('button', {
+    classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'SALVAR LIMITE DE HORAS',
+  });
+  const formHoras = criar('form', { classe: 'form-limite', novalidate: true }, [
+    criar('label', { classe: 'rotulo', for: 'max-horas',
+      texto: 'Maximo de horas que um uso pode ficar aberto' }),
+    campoHoras,
+    criar('p', { classe: 'dica',
+      texto: 'Vale na abertura do uso. Nao encerra nada sozinho: usos que passam do limite '
+           + 'aparecem destacados para a administracao decidir.' }),
+    config.usos_abertos_excedidos > 0
+      ? criar('p', { classe: 'erro-bloco',
+          texto: `${config.usos_abertos_excedidos} uso(s) em aberto ja passaram do limite. `
+               + 'Abra o dia no calendario e cancele pelo detalhe do registro.' })
+      : null,
+    botaoHoras,
+  ]);
+  formHoras.addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    try {
+      await comCarregamento(botaoHoras, async () => {
+        const r = await definirMaxHorasUso(Number(campoHoras.value));
+        avisar(`Limite definido em ${r.horas} hora(s).`, 'ok');
+        await abrirAdmin();
+      });
+    } catch (erro) {
+      tratarErro(erro);
+    }
+  });
+
+  const blocoHoras = criar('div', {}, [
+    criar('h3', { classe: 'secao', texto: 'Uso em aberto' }),
+    formHoras,
   ]);
 
   const reservadas = config.matriculas_reservadas?.length
@@ -799,6 +908,7 @@ function cartaoConfiguracao(config) {
       criar('h3', { classe: 'secao', texto: 'Limite de matriculas' }),
       resumo,
       criar('p', { classe: 'dica', texto: 'Somente o administrador principal altera este limite.' }),
+      blocoHoras,
       reservadas,
     ]);
   }
@@ -815,9 +925,9 @@ function cartaoConfiguracao(config) {
   const botao = criar('button', { classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'SALVAR LIMITE' });
 
   const formulario = criar('form', { classe: 'form-limite', novalidate: true }, [
-    criar('label', { classe: 'rotulo', for: 'limite-matriculas', texto: 'Maximo de funcionarios ativos' }),
+    criar('label', { classe: 'rotulo', for: 'limite-matriculas', texto: 'Maximo de colaboradores ativos' }),
     campo,
-    criar('p', { classe: 'dica', texto: 'Use 0 para nao ter limite. Excluir um funcionario libera vaga.' }),
+    criar('p', { classe: 'dica', texto: 'Use 0 para nao ter limite. Excluir um colaborador libera vaga.' }),
     botao,
   ]);
 
@@ -843,6 +953,7 @@ function cartaoConfiguracao(config) {
     criar('h3', { classe: 'secao', texto: 'Limite de matriculas' }),
     resumo,
     formulario,
+    blocoHoras,
     reservadas,
   ]);
 }
@@ -871,7 +982,7 @@ function linhaFuncionario(pessoa) {
       const ok = await confirmar({
         titulo: `Excluir ${pessoa.nome}?`,
         corpo: [
-          criar('p', { texto: 'O funcionario deixa de aparecer na lista e nao consegue mais entrar. '
+          criar('p', { texto: 'O colaborador deixa de aparecer na lista e nao consegue mais entrar. '
                             + 'As programacoes futuras dele sao canceladas e a vaga e liberada.' }),
           criar('p', { classe: 'dica', texto: 'Os usos e a auditoria dele permanecem: o historico do '
                                             + 'sistema nao pode ser apagado por ninguem.' }),
@@ -930,6 +1041,257 @@ function botaoAcao(texto, acao, variante) {
       }
     },
   });
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Agendamentos ciclicos (administracao)                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Lista as regras de repeticao e oferece o cadastro de novas.
+ * As ocorrencias viram programacoes comuns no calendario - por isso a checagem
+ * de conflito e a prioridade do QR Code 1 continuam valendo sem caso especial.
+ */
+async function montarCiclicos(container, pessoas) {
+  preencher(container, [
+    criar('h3', { classe: 'secao', texto: 'Agendamentos ciclicos' }),
+    criar('p', { classe: 'carregando-texto', texto: 'Carregando...' }),
+  ]);
+
+  let regras;
+  try {
+    regras = await listarCiclicos();
+  } catch (erro) {
+    tratarErro(erro);
+    return;
+  }
+
+  const lista = regras.length
+    ? criar('ul', { classe: 'lista-registros' }, regras.map((r) => linhaCiclico(r, container, pessoas)))
+    : criar('p', { classe: 'vazio', texto: 'Nenhuma regra de repeticao cadastrada.' });
+
+  preencher(container, [
+    criar('h3', { classe: 'secao', texto: `Agendamentos ciclicos (${regras.length})` }),
+    criar('button', {
+      classe: 'btn btn-primario btn-largo',
+      type: 'button',
+      texto: '+ NOVA REGRA DE REPETICAO',
+      onClick: () => formularioCiclico(container, pessoas),
+    }),
+    lista,
+  ]);
+}
+
+function linhaCiclico(regra, container, pessoas) {
+  const acoes = [];
+
+  if (regra.ativo) {
+    acoes.push(
+      criar('button', {
+        classe: 'btn btn-texto',
+        type: 'button',
+        texto: 'Estender',
+        onClick: async (evento) => {
+          try {
+            await comCarregamento(evento.currentTarget, async () => {
+              const r = await estenderCiclico(regra.id);
+              avisar(
+                r.criados > 0
+                  ? `${r.criados} ocorrencia(s) criada(s)${r.pulados > 0 ? `, ${r.pulados} pulada(s) por conflito` : ''}.`
+                  : 'Nenhuma ocorrencia nova: o horizonte ja estava coberto.',
+                'ok',
+              );
+              await montarCiclicos(container, pessoas);
+            });
+          } catch (erro) {
+            tratarErro(erro);
+          }
+        },
+      }),
+      criar('button', {
+        classe: 'btn btn-texto btn-perigo',
+        type: 'button',
+        texto: 'Desativar',
+        onClick: async (evento) => {
+          const ok = await confirmar({
+            titulo: 'Desativar regra de repeticao',
+            corpo: [
+              criar('p', { texto: 'As ocorrencias futuras serao canceladas e os horarios liberados.' }),
+              criar('p', { classe: 'dica', texto: 'As ocorrencias passadas permanecem: sao historico.' }),
+            ],
+            textoOk: 'Desativar',
+            textoCancelar: 'Voltar',
+          });
+          if (!ok) return;
+          try {
+            await comCarregamento(evento.currentTarget, async () => {
+              const r = await desativarCiclico(regra.id, true);
+              avisar(`Regra desativada. ${r.ocorrencias_canceladas} ocorrencia(s) cancelada(s).`, 'ok');
+              await montarCiclicos(container, pessoas);
+              await Promise.all([carregarMes(), carregarDia()]);
+            });
+          } catch (erro) {
+            tratarErro(erro);
+          }
+        },
+      }),
+    );
+  }
+
+  return criar('li', { classe: regra.ativo ? 'registro' : 'registro inativo' }, [
+    criar('div', { classe: 'registro-topo' }, [
+      criar('strong', { texto: `${regra.pta} • ${regra.hora_inicio}–${regra.hora_fim}` }),
+      criar('span', {
+        classe: `etiqueta ${regra.ativo ? 'et-ciclico' : ''}`,
+        texto: regra.ativo ? descreverRegra(regra) : 'Desativada',
+      }),
+    ]),
+    criar('span', { classe: 'registro-horas' }, [
+      pessoaComTerceiro(regra.funcionario, regra.fornecedor),
+      ` • matricula ${regra.matricula}`,
+    ]),
+    criar('span', {
+      classe: 'registro-horas',
+      texto: `${regra.ocorrencias_futuras} ocorrencia(s) futura(s)`
+           + (regra.gerado_ate ? ` • gerado ate ${regra.gerado_ate}` : '')
+           + (regra.data_fim ? ` • termina em ${regra.data_fim}` : ''),
+    }),
+    criar('span', {
+      classe: 'registro-horas',
+      texto: `Criada por ${regra.criado_por}${regra.do_master ? ' (administrador principal)' : ''}`,
+    }),
+    acoes.length ? criar('div', { classe: 'acoes-linha' }, acoes) : null,
+  ]);
+}
+
+function formularioCiclico(container, pessoas) {
+  const ativos = pessoas.filter((p) => p.ativo);
+
+  const seletorPta = criar('select', { classe: 'campo', id: 'cic-pta' },
+    estado.ptas.map((pta) => criar('option', { value: pta.id, texto: pta.codigo })));
+
+  // O ciclico fica em nome de um colaborador JA CADASTRADO, escolhido aqui.
+  const seletorPessoa = criar('select', { classe: 'campo', id: 'cic-pessoa' },
+    ativos.map((p) => criar('option', { value: p.id, texto: `${p.nome} — ${p.matricula}` })));
+
+  const campoInicio = criar('input', { classe: 'campo', id: 'cic-inicio', type: 'time', value: '08:00' });
+  const campoFim = criar('input', { classe: 'campo', id: 'cic-fim', type: 'time', value: '10:00' });
+
+  const campoDataInicio = criar('input', { classe: 'campo', id: 'cic-de', type: 'date', value: estado.hoje });
+  const campoDataFim = criar('input', { classe: 'campo', id: 'cic-ate', type: 'date' });
+
+  /* ------------------------------------------------ como a repeticao ocorre */
+
+  const caixasDias = DIAS.map((d) => {
+    const cx = criar('input', { classe: 'cx-dia', type: 'checkbox', id: `dia-${d.valor}`, value: String(d.valor) });
+    return { d, cx, bloco: criar('label', { classe: 'rotulo-dia', for: `dia-${d.valor}` }, [cx, d.curto]) };
+  });
+  const blocoDias = criar('div', { classe: 'grade-dias' }, caixasDias.map((x) => x.bloco));
+
+  const campoIntervalo = criar('input', {
+    classe: 'campo', id: 'cic-intervalo', type: 'number', min: '1', max: '365', step: '1', value: '7',
+  });
+  const blocoIntervalo = criar('div', { classe: 'campo-bloco', hidden: true }, [
+    criar('label', { classe: 'rotulo', for: 'cic-intervalo', texto: 'Repetir a cada quantos dias' }),
+    campoIntervalo,
+  ]);
+
+  const radioDias = criar('input', { type: 'radio', name: 'cic-tipo', id: 'tipo-dias', value: 'DIAS_SEMANA', checked: true });
+  const radioIntervalo = criar('input', { type: 'radio', name: 'cic-tipo', id: 'tipo-intervalo', value: 'INTERVALO_DIAS' });
+
+  const alternar = () => {
+    const porDias = radioDias.checked;
+    blocoDias.hidden = !porDias;
+    blocoIntervalo.hidden = porDias;
+  };
+  radioDias.addEventListener('change', alternar);
+  radioIntervalo.addEventListener('change', alternar);
+
+  const terceiro = criarSeletorTerceiro();
+  const botao = criar('button', { classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'CRIAR REGRA' });
+
+  const formulario = criar('form', { classe: 'form-agendamento', novalidate: true }, [
+    bloco('PTA', seletorPta, 'cic-pta'),
+    bloco('Colaborador responsavel', seletorPessoa, 'cic-pessoa'),
+    criar('div', { classe: 'linha-campos' }, [
+      bloco('Inicio', campoInicio, 'cic-inicio'),
+      bloco('Fim', campoFim, 'cic-fim'),
+    ]),
+
+    criar('h4', { classe: 'secao', texto: 'Como se repete' }),
+    criar('div', { classe: 'grupo-radio' }, [
+      criar('label', { classe: 'rotulo-radio', for: 'tipo-dias' }, [radioDias, ' Em dias da semana']),
+      criar('label', { classe: 'rotulo-radio', for: 'tipo-intervalo' }, [radioIntervalo, ' A cada N dias']),
+    ]),
+    blocoDias,
+    blocoIntervalo,
+
+    criar('div', { classe: 'linha-campos' }, [
+      bloco('A partir de', campoDataInicio, 'cic-de'),
+      bloco('Ate (opcional)', campoDataFim, 'cic-ate'),
+    ]),
+
+    terceiro.elemento,
+    criar('p', {
+      classe: 'dica',
+      texto: 'As ocorrencias sao criadas para os proximos 90 dias. Datas ja ocupadas na mesma PTA '
+           + 'sao puladas, e o total pulado aparece no aviso.',
+    }),
+    botao,
+    criar('button', {
+      classe: 'btn btn-texto',
+      type: 'button',
+      texto: 'Cancelar',
+      onClick: () => montarCiclicos(container, pessoas),
+    }),
+  ]);
+
+  formulario.addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+
+    if (!intervaloValido(campoInicio.value, campoFim.value)) {
+      avisar('O horario final deve ser posterior ao horario inicial.', 'erro');
+      return;
+    }
+    const dias = caixasDias.filter((x) => x.cx.checked).map((x) => x.d.valor);
+    if (radioDias.checked && !dias.length) {
+      avisar('Selecione ao menos um dia da semana.', 'erro');
+      return;
+    }
+
+    try {
+      await comCarregamento(botao, async () => {
+        const r = await criarCiclico({
+          ptaId: seletorPta.value,
+          funcionarioId: seletorPessoa.value,
+          horaInicio: campoInicio.value,
+          horaFim: campoFim.value,
+          tipo: radioDias.checked ? 'DIAS_SEMANA' : 'INTERVALO_DIAS',
+          diasSemana: dias,
+          intervaloDias: Number(campoIntervalo.value),
+          dataInicio: campoDataInicio.value || null,
+          dataFim: campoDataFim.value || null,
+          fornecedorId: terceiro.valor(),
+        });
+        avisar(
+          `Regra criada: ${r.criados} ocorrencia(s)`
+          + (r.pulados > 0 ? `, ${r.pulados} pulada(s) por conflito de horario.` : '.'),
+          'ok',
+        );
+        await montarCiclicos(container, pessoas);
+        await Promise.all([carregarMes(), carregarDia()]);
+      });
+    } catch (erro) {
+      tratarErro(erro);
+    }
+  });
+
+  preencher(container, [
+    criar('h3', { classe: 'secao', texto: 'Nova regra de repeticao' }),
+    formulario,
+  ]);
+  alternar();
 }
 
 /* -------------------------------------------------------------------------- */

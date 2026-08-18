@@ -13,7 +13,7 @@ export async function listar({ limite = 100, ptaId = null } = {}) {
 
 /** Rotulos legiveis para os tipos de acao gravados no banco. */
 export const ROTULOS_ACAO = {
-  CADASTRO_USUARIO: 'Cadastro de funcionario',
+  CADASTRO_USUARIO: 'Cadastro de colaborador',
   LOGIN: 'Login',
   LOGIN_FALHA: 'Tentativa de login',
   LOGOUT: 'Logout',

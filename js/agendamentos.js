@@ -12,13 +12,14 @@
 import { rpc } from './api.js';
 import { tokenAtual } from './auth.js';
 
-export async function criar({ ptaId, data, horaInicio, horaFim }) {
+export async function criar({ ptaId, data, horaInicio, horaFim, fornecedorId = null }) {
   return rpc('fn_agendamento_criar', {
     p_token: tokenAtual(),
     p_pta_id: ptaId,
     p_data: data,
     p_hora_inicio: horaInicio,
     p_hora_fim: horaFim,
+    p_fornecedor_id: fornecedorId,
   });
 }
 
@@ -26,13 +27,14 @@ export async function criar({ ptaId, data, horaInicio, horaFim }) {
  * Altera data e horario de uma programacao ainda ativa.
  * Permitido ao autor e a qualquer administrador (a checagem e feita no banco).
  */
-export async function alterar({ agendamentoId, data, horaInicio, horaFim }) {
+export async function alterar({ agendamentoId, data, horaInicio, horaFim, fornecedorId = null }) {
   return rpc('fn_agendamento_alterar', {
     p_token: tokenAtual(),
     p_agendamento_id: agendamentoId,
     p_data: data,
     p_hora_inicio: horaInicio,
     p_hora_fim: horaFim,
+    p_fornecedor_id: fornecedorId,
   });
 }
 

@@ -16,10 +16,12 @@ import { APP, configuracaoPendente } from './config.js';
 import { criarFluxoLogin } from './login-ui.js';
 import { MINUTOS_DE_PRAZO, prazo, restantes, salvar as salvarObservacao } from './observacoes.js';
 import { listarPtas, normalizarCodigo, parametrosDaUrl, situacao } from './ptas.js';
+import { criarSeletorTerceiro } from './fornecedor-ui.js';
 import { montarPerfil } from './perfil-ui.js';
 import { agora, dataCurta, duracaoHumana, horaCurta, isoHora, minutosEntre, sincronizarRelogio } from './tempo.js';
 import {
-  $, avisar, carregandoGlobal, comCarregamento, confirmar, criar, etiqueta, preencher, mostrarTela, tratarErro,
+  $, avisar, carregandoGlobal, comCarregamento, confirmar, criar, etiqueta, pessoaComTerceiro,
+  preencher, mostrarTela, tratarErro,
 } from './ui.js';
 import { detalhe as detalheUso, finalizar, iniciar, meuUsoAberto, minhaProgramacao } from './usos.js';
 
@@ -187,7 +189,11 @@ function desenharDashboard(funcionario, dados) {
     emUso
       ? criar('div', { classe: 'status-detalhe' }, [
           criar('p', {}, [
-            criar('span', { texto: meuUso ? 'Uso em andamento (seu)' : `Em uso por ${uso.funcionario}` }),
+            meuUso
+              ? criar('span', {}, ['Uso em andamento (seu)',
+                  uso.fornecedor ? criar('span', {}, [' / ',
+                    criar('strong', { classe: 'terceiro-inline', texto: uso.fornecedor })]) : null])
+              : criar('span', {}, ['Em uso por ', pessoaComTerceiro(uso.funcionario, uso.fornecedor)]),
           ]),
           criar('p', { classe: 'linha-horarios' }, [
             criar('span', {}, [criar('em', { texto: 'Inicio efetivo: ' }), horaDe(uso.inicio_efetivo)]),
@@ -331,6 +337,9 @@ function abrirInicioDeUso() {
 
   const botao = criar('button', { classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'CONFIRMAR USO' });
 
+  // Opcao secundaria: incluir a empresa terceira que vai trabalhar junto.
+  const terceiro = criarSeletorTerceiro();
+
   const formulario = criar('form', { classe: 'form-uso', novalidate: true }, [
     criar('div', { classe: 'cartao-horario' }, [
       criar('div', {}, [
@@ -349,6 +358,7 @@ function abrirInicioDeUso() {
     criar('label', { classe: 'rotulo', for: 'hora-fim', texto: 'Horario final pretendido' }),
     campoFim,
     resumo,
+    terceiro.elemento,
     botao,
   ]);
 
@@ -362,6 +372,9 @@ function abrirInicioDeUso() {
         criar('p', { texto: 'Voce deseja utilizar a PTA:' }),
         criar('p', { classe: 'confirmacao-destaque', texto: estado.codigoPta }),
         criar('p', { texto: `Das ${horaCurta(agora())} as ${campoFim.value}?` }),
+        terceiro.valor()
+          ? criar('p', { classe: 'dica', texto: 'Com terceiro incluido.' })
+          : null,
       ],
       textoOk: 'CONFIRMAR USO',
       textoCancelar: 'CANCELAR',
@@ -370,7 +383,7 @@ function abrirInicioDeUso() {
 
     try {
       await comCarregamento(botao, async () => {
-        const resultado = await iniciar(estado.codigoPta, campoFim.value);
+        const resultado = await iniciar(estado.codigoPta, campoFim.value, terceiro.valor());
 
         if (resultado.agendamentos_afetados > 0) {
           avisar(

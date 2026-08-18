@@ -57,7 +57,7 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
 
   async function passoFuncionarios(setor) {
     estado.setor = setor;
-    preencher(container, criar('p', { classe: 'carregando-texto', texto: 'Carregando funcionarios...' }));
+    preencher(container, criar('p', { classe: 'carregando-texto', texto: 'Carregando colaboradores...' }));
 
     try {
       estado.funcionarios = await listarFuncionarios(setor.id);
@@ -71,8 +71,8 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
     if (!estado.funcionarios.length) {
       preencher(container, [
         cabecalhoPasso(`Setor: ${setor.nome}`, passoSetor),
-        criar('h2', { classe: 'titulo-passo', texto: 'Funcionarios cadastrados' }),
-        criar('p', { classe: 'vazio', texto: 'Nenhum funcionario cadastrado neste setor ainda.' }),
+        criar('h2', { classe: 'titulo-passo', texto: 'Colaboradores cadastrados' }),
+        criar('p', { classe: 'vazio', texto: 'Nenhum colaborador cadastrado neste setor ainda.' }),
         criar('button', {
           classe: 'btn btn-secundario btn-largo',
           type: 'button',
@@ -87,7 +87,7 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
     const semResultado = criar('p', {
       classe: 'vazio',
       hidden: true,
-      texto: 'Nenhum funcionario encontrado com esse termo.',
+      texto: 'Nenhum colaborador encontrado com esse termo.',
     });
 
     // Busca por nome ou matricula. O campo e opcional: a lista completa
@@ -97,7 +97,7 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
       type: 'search',
       autocomplete: 'off',
       placeholder: 'Buscar por nome ou matricula',
-      'aria-label': 'Buscar funcionario por nome ou matricula',
+      'aria-label': 'Buscar colaborador por nome ou matricula',
       'aria-controls': 'lista-funcionarios',
     });
     listaEl.id = 'lista-funcionarios';
@@ -132,7 +132,7 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
       semResultado.hidden = filtrados.length > 0;
       contador.textContent = termo
         ? `${filtrados.length} de ${estado.funcionarios.length}`
-        : `${estado.funcionarios.length} funcionario(s)`;
+        : `${estado.funcionarios.length} colaborador(es)`;
     }
 
     campoBusca.addEventListener('input', desenharLista);
@@ -147,7 +147,7 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
 
     preencher(container, [
       cabecalhoPasso(`Setor: ${setor.nome}`, passoSetor),
-      criar('h2', { classe: 'titulo-passo', texto: 'Funcionarios cadastrados' }),
+      criar('h2', { classe: 'titulo-passo', texto: 'Colaboradores cadastrados' }),
       campoBusca,
       contador,
       listaEl,
