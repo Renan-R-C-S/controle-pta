@@ -366,7 +366,9 @@ begin
   v_desc := 'T32 cancelar agendamento de outro funcionario e bloqueado'; v_erro := null;
   begin perform public.fn_agendamento_cancelar(v_ta, v_ag_b);
   exception when others then v_erro := sqlerrm; end;
-  if v_erro = 'SEM_PERMISSAO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  -- Desde que existe o perfil administrativo, quem barra este caso e o
+  -- fn__exigir_admin: cancelar programacao alheia passou a ser acao de ADMIN.
+  if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
 
   v_rel := v_rel || E'\n-- SOBRESCRITA QR1 > QR2 ----------------------------\n';
@@ -543,7 +545,11 @@ begin
   if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'alterou!') || E'\n'; end if;
 
-  -- T50 a alteracao continua respeitando conflito (T27 ocupou 08:00-10:00)
+  -- T50 a alteracao continua respeitando conflito.
+  -- O horario ocupado precisa estar na MESMA PTA do agendamento que sera
+  -- movido (v_ag_alvo esta na PTA-901), senao nao ha conflito nenhum.
+  perform public.fn_agendamento_criar(v_tb, v_p901, v_amanha, '08:00', '09:00');
+
   v_desc := 'T50 alteracao para horario ocupado e bloqueada'; v_erro := null;
   begin perform public.fn_agendamento_alterar(v_tadm, v_ag_alvo, v_amanha, '08:30', '09:30');
   exception when others then v_erro := sqlerrm; end;
