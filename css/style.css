@@ -297,6 +297,15 @@ pre {
 .resumo-periodo.invalido { color: var(--vermelho); font-weight: 600; }
 
 /* -------------------------------------------------- Identificacao / login */
+.campo-busca { margin-bottom: .375rem; }
+.contador-busca {
+  display: block;
+  margin-bottom: .625rem;
+  font-size: .75rem;
+  color: var(--texto-suave);
+  font-variant-numeric: tabular-nums;
+}
+
 .lista-funcionarios { list-style: none; margin: 0 0 1rem; padding: 0; }
 .lista-funcionarios li + li { margin-top: .5rem; }
 
@@ -399,6 +408,29 @@ pre {
 .registro-horas { display: block; font-size: .9375rem; font-variant-numeric: tabular-nums; color: var(--texto-suave); }
 .registro-horas.forte { color: var(--texto); font-weight: 600; }
 .registro-obs { margin: .5rem 0 0; padding: .5rem .75rem; background: var(--cinza-100); border-radius: var(--raio-pequeno); font-size: .875rem; }
+
+/* ---------------------------------------------------------- Administracao */
+.registro.inativo { opacity: .65; border-style: dashed; }
+
+.acoes-linha {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem 1rem;
+  margin-top: .5rem;
+  padding-top: .5rem;
+  border-top: 1px solid var(--borda);
+}
+.acoes-linha .btn-texto { min-height: 40px; padding: .375rem 0; }
+
+.btn-perigo { color: var(--vermelho); }
+@media (prefers-color-scheme: dark) { .btn-perigo { color: #ff8a80; } }
+
+.papel-funcionario { background: var(--cinza-100); color: var(--cinza-700); }
+.papel-admin { background: var(--azul-claro); color: var(--azul); border-color: var(--azul); }
+.papel-admin_master { background: var(--laranja-claro); color: var(--laranja); border-color: var(--laranja); }
+
+.form-limite, .form-perfil { margin-top: 1rem; }
+.form-limite .campo { max-width: 180px; }
 
 /* -------------------------------------------------------------- Etiquetas */
 .etiqueta {
