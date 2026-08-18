@@ -54,6 +54,20 @@ const MENSAGENS = {
   AGENDAMENTO_NAO_CANCELAVEL: 'Esta programacao nao pode mais ser cancelada.',
   REGISTRO_NAO_ENCONTRADO: 'Registro nao encontrado.',
 
+  AGENDAMENTO_NAO_ALTERAVEL: 'Esta programacao nao pode mais ser alterada.',
+
+  // Administracao
+  SEM_PERMISSAO_ADMIN: 'Esta acao e restrita aos administradores.',
+  SOMENTE_ADMIN_MASTER: 'Somente o administrador principal pode fazer isso.',
+  ADMIN_MASTER_PROTEGIDO: 'O administrador principal nao pode ser alterado nem excluido.',
+  PAPEL_PROPRIO_BLOQUEADO: 'Voce nao pode alterar o seu proprio nivel de acesso.',
+  EXCLUSAO_PROPRIA_BLOQUEADA: 'Voce nao pode excluir a sua propria conta.',
+  PAPEL_INVALIDO: 'Nivel de acesso invalido.',
+  FUNCIONARIO_COM_USO_ABERTO: 'Este funcionario tem um uso em aberto. Ele precisa finalizar antes de ser excluido.',
+  LIMITE_MATRICULAS_ATINGIDO: 'O limite de matriculas do sistema foi atingido. Procure o administrador.',
+  LIMITE_INVALIDO: 'Informe um limite valido (0 ou mais).',
+  LIMITE_ABAIXO_DO_ATUAL: 'O limite nao pode ser menor que o numero de funcionarios ativos.',
+
   // Historico
   HISTORICO_IMUTAVEL: 'O historico do sistema nao pode ser alterado.',
 
