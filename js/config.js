@@ -16,8 +16,8 @@
  * banco: RLS habilitado sem politicas + funcoes SECURITY DEFINER (sql/03_rls.sql).
  */
 
-export const SUPABASE_URL = 'https://SEU-PROJETO.supabase.co';
-export const SUPABASE_ANON_KEY = 'COLE_AQUI_SUA_CHAVE_ANON';
+export const SUPABASE_URL = 'https://pzcisiukzsudgnmjondf.supabase.co';
+export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6Y2lzaXVrenN1ZGdubWpvbmRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwMDM4NTQsImV4cCI6MjEwMjU3OTg1NH0.mkvJ0f3IEZ2XblkhceenfOnpzndVeJ4a-tiTmDz-zkU';
 
 /** Configuracoes gerais da aplicacao. */
 export const APP = {
