@@ -65,6 +65,13 @@ declare
   v_uadm     uuid; v_tadm  uuid;   -- ADMIN comum
   v_ualvo    uuid; v_talvo uuid;   -- funcionario que sera desativado
   v_ag_alvo  uuid;
+  -- terceiros, cancelamento e ciclicos
+  v_forn      uuid;
+  v_uuid      uuid;
+  v_uso_c     uuid;
+  v_ag_master uuid;
+  v_ciclico   uuid;
+  v_ciclico2  uuid;
 begin
   v_local   := now() at time zone public.fn_tz();
   v_ultima  := v_local::date + time '23:59';
@@ -701,6 +708,251 @@ begin
   exception when others then v_erro := sqlerrm; end;
   if v_erro = 'HISTORICO_IMUTAVEL' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'apagou!') || E'\n'; end if;
+
+  v_rel := v_rel || E'\n-- TERCEIROS, CANCELAMENTO E CICLICOS ---------------\n';
+
+  -- ===========================================================================
+  -- TERCEIROS (FORNECEDORES)
+  -- ===========================================================================
+
+  -- T69 cadastro de terceiro
+  v_desc := 'T69 funcionario cadastra um terceiro'; v_erro := null;
+  begin
+    v_r := public.fn_fornecedor_criar(v_ta, 'Alfa Montagens Ltda', '11222333000144');
+    v_forn := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_forn is not null and (v_r->>'ja_existia')::boolean is false then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T70 nome repetido nao duplica cadastro
+  v_desc := 'T70 terceiro com mesmo nome nao vira cadastro duplicado'; v_erro := null;
+  begin v_r := public.fn_fornecedor_criar(v_tb, '  alfa MONTAGENS ltda ');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'ja_existia')::boolean and (v_r->>'id')::uuid = v_forn then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T71 busca por trecho do nome
+  v_desc := 'T71 busca de terceiro por trecho do nome';
+  select count(*) into v_int from public.fn_fornecedores('montag');
+  if v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' resultados' || E'\n'; end if;
+
+  -- T72 terceiro fica vinculado ao uso
+  v_desc := 'T72 uso registra o terceiro escolhido'; v_erro := null;
+  begin
+    v_r := public.fn_uso_iniciar(v_tb, 'PTA-902', v_fim_90, v_forn);
+    v_uso_c := (v_r->>'uso_id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select fornecedor_id into v_uuid from public.usos where id = v_uso_c;
+  if v_erro is null and v_uuid = v_forn then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'sem vinculo') || E'\n'; end if;
+
+  -- T73 terceiro inexistente e recusado
+  v_desc := 'T73 uso com terceiro inexistente e recusado'; v_erro := null;
+  begin perform public.fn_agendamento_criar(v_ta, v_p902, v_amanha, '05:00', '05:30', gen_random_uuid());
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'FORNECEDOR_NAO_ENCONTRADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- ===========================================================================
+  -- CANCELAMENTO DE USO EM ABERTO
+  -- ===========================================================================
+
+  -- T74 administrador cancela uso em aberto
+  v_desc := 'T74 administrador cancela um uso em aberto'; v_erro := null;
+  begin perform public.fn_admin_cancelar_uso(v_tadm, v_uso_c, 'Esquecido em aberto');
+  exception when others then v_erro := sqlerrm; end;
+  select status into v_txt from public.usos where id = v_uso_c;
+  if v_erro is null and v_txt = 'CANCELADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+
+  -- T75 uso cancelado NAO ganha fim_efetivo inventado
+  v_desc := 'T75 uso cancelado fica sem fim efetivo';
+  select (fim_efetivo is null and cancelado_em is not null and cancelado_por is not null)
+    into v_bool from public.usos where id = v_uso_c;
+  if v_bool then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || E'\n'; end if;
+
+  -- T76 cancelar libera a PTA para um novo uso
+  v_desc := 'T76 uso cancelado libera a PTA'; v_erro := null;
+  begin
+    v_r := public.fn_uso_iniciar(v_tb, 'PTA-902', v_fim_90);
+    perform public.fn_uso_finalizar(v_tb, (v_r->>'uso_id')::uuid);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_erro || E'\n'; end if;
+
+  -- T77 uso cancelado continua aparecendo no cronograma
+  v_desc := 'T77 uso cancelado continua visivel no calendario';
+  select count(*) into v_int
+    from public.fn_agenda_dia((now() at time zone public.fn_tz())::date, null) d
+   where d.id = v_uso_c and d.status = 'CANCELADO';
+  if v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || E'\n'; end if;
+
+  -- T78 uso ja finalizado nao pode ser cancelado
+  v_desc := 'T78 uso ja finalizado nao pode ser cancelado'; v_erro := null;
+  begin perform public.fn_admin_cancelar_uso(v_tadm, v_uso_a, 'tentativa');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'USO_NAO_CANCELAVEL' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'cancelou!') || E'\n'; end if;
+
+  -- ===========================================================================
+  -- LIMITE DE HORAS DE USO EM ABERTO
+  -- ===========================================================================
+
+  -- T79 somente administrador define o limite de horas
+  v_desc := 'T79 funcionario comum nao altera o limite de horas'; v_erro := null;
+  begin perform public.fn_admin_definir_max_horas_uso(v_ta, 6);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'alterou!') || E'\n'; end if;
+
+  -- T80 o limite configurado vale na abertura do uso
+  -- So faz sentido se ainda houver mais de 1h ate a meia-noite.
+  v_desc := 'T80 limite de horas recusa uso mais longo'; v_erro := null;
+  perform public.fn_admin_definir_max_horas_uso(v_tadm, 1);
+  -- O alvo foi desativado no T55, o que encerrou as sessoes dele; o T59
+  -- reativou o cadastro, mas nao a sessao. Precisa entrar de novo.
+  -- A PTA-903 esta ocupada desde o T33, entao o teste usa a PTA-902.
+  v_r := public.fn_login(v_ualvo, '4444');
+  v_talvo := (v_r->>'token')::uuid;
+  if extract(epoch from (public.fn__local_para_utc(v_local::date, v_fim_120) - now())) > 4200 then
+    begin perform public.fn_uso_iniciar(v_talvo, 'PTA-902', v_fim_120);
+    exception when others then v_erro := sqlerrm; end;
+    if v_erro = 'DURACAO_EXCESSIVA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+    else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+  else
+    v_ok := v_ok + 1;
+    v_rel := v_rel || '  [OK]    ' || v_desc || ' (pulado: menos de 1h ate a meia-noite)' || E'\n';
+  end if;
+  perform public.fn_admin_definir_max_horas_uso(v_tadm, 14);
+
+  -- ===========================================================================
+  -- REGISTROS DO ADMINISTRADOR PRINCIPAL
+  -- ===========================================================================
+
+  -- Programacao criada pelo proprio ADMIN_MASTER
+  v_r := public.fn_agendamento_criar(v_tm, v_p902, v_amanha, '14:00', '15:00');
+  v_ag_master := (v_r->>'id')::uuid;
+
+  -- T81 outro administrador nao altera registro do master
+  v_desc := 'T81 ADMIN comum nao altera registro criado pelo ADMIN_MASTER'; v_erro := null;
+  begin perform public.fn_agendamento_alterar(v_tadm, v_ag_master, v_amanha, '16:00', '17:00');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'REGISTRO_DO_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'alterou!') || E'\n'; end if;
+
+  -- T82 outro administrador nao cancela registro do master
+  v_desc := 'T82 ADMIN comum nao cancela registro do ADMIN_MASTER'; v_erro := null;
+  begin perform public.fn_agendamento_cancelar(v_tadm, v_ag_master);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'REGISTRO_DO_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'cancelou!') || E'\n'; end if;
+
+  -- T83 o proprio master altera o que criou
+  v_desc := 'T83 o ADMIN_MASTER altera o proprio registro'; v_erro := null;
+  begin perform public.fn_agendamento_alterar(v_tm, v_ag_master, v_amanha, '16:00', '17:00');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_erro || E'\n'; end if;
+
+  -- ===========================================================================
+  -- AGENDAMENTOS CICLICOS
+  -- ===========================================================================
+
+  -- T84 funcionario comum nao cria regra ciclica
+  v_desc := 'T84 funcionario comum nao cria agendamento ciclico'; v_erro := null;
+  begin perform public.fn_ciclico_criar(v_ta, v_p901, v_ua, '05:00', '05:30', 'INTERVALO_DIAS',
+                                        null, 7, null, null, null);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'criou!') || E'\n'; end if;
+
+  -- T85 regra por dias da semana gera ocorrencias
+  v_desc := 'T85 ciclico por dias da semana gera ocorrencias'; v_erro := null;
+  begin
+    v_r := public.fn_ciclico_criar(v_tadm, v_p901, v_ub, '03:00', '04:00', 'DIAS_SEMANA',
+                                   array[1,3,5]::smallint[], null, null, null, null);
+    v_ciclico := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int from public.agendamentos where ciclico_id = v_ciclico;
+  -- ~90 dias com 3 dias por semana => algo em torno de 38 ocorrencias
+  if v_erro is null and v_int between 30 and 45 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' ocorrencias)' || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T86 as ocorrencias caem exatamente nos dias pedidos
+  v_desc := 'T86 ocorrencias caem apenas nos dias da semana escolhidos';
+  select count(*) into v_int from public.agendamentos
+   where ciclico_id = v_ciclico
+     and extract(dow from data_ref)::smallint not in (1, 3, 5);
+  if v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' fora dos dias' || E'\n'; end if;
+
+  -- T87 regra por intervalo de dias
+  v_desc := 'T87 ciclico a cada N dias gera ocorrencias espacadas'; v_erro := null;
+  begin
+    v_r := public.fn_ciclico_criar(v_tadm, v_p903, v_ub, '02:00', '02:30', 'INTERVALO_DIAS',
+                                   null, 10, null, null, null);
+    v_ciclico2 := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int from public.agendamentos where ciclico_id = v_ciclico2;
+  if v_erro is null and v_int between 7 and 10 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' ocorrencias)' || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T88 o ciclico fica em nome do funcionario escolhido, nao do administrador
+  v_desc := 'T88 ocorrencias ficam em nome do funcionario escolhido';
+  select count(*) into v_int from public.agendamentos
+   where ciclico_id = v_ciclico and funcionario_id <> v_ub;
+  if v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' em outro nome' || E'\n'; end if;
+
+  -- T89 funcionario inexistente e recusado
+  v_desc := 'T89 ciclico exige funcionario cadastrado'; v_erro := null;
+  begin perform public.fn_ciclico_criar(v_tadm, v_p901, gen_random_uuid(), '01:00', '01:30',
+                                        'INTERVALO_DIAS', null, 5, null, null, null);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'FUNCIONARIO_NAO_ENCONTRADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'criou!') || E'\n'; end if;
+
+  -- T90 datas ocupadas sao puladas, nao derrubam a geracao
+  v_desc := 'T90 ciclico pula horarios ja ocupados'; v_erro := null;
+  begin
+    -- mesma PTA e mesmo horario da regra anterior: tudo deve ser pulado
+    v_r := public.fn_ciclico_criar(v_tadm, v_p901, v_ualvo, '03:00', '04:00', 'DIAS_SEMANA',
+                                   array[1,3,5]::smallint[], null, null, null, null);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'criados')::int = 0 and (v_r->>'pulados')::int > 0 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || (v_r->>'pulados') || ' pulados)' || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T91 desativar a regra cancela as ocorrencias futuras
+  v_desc := 'T91 desativar regra ciclica cancela as ocorrencias futuras'; v_erro := null;
+  begin v_r := public.fn_ciclico_desativar(v_tadm, v_ciclico, true);
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int from public.agendamentos
+   where ciclico_id = v_ciclico and status = 'AGENDADO';
+  if v_erro is null and v_int = 0 and (v_r->>'ocorrencias_canceladas')::int > 0 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T92 as ocorrencias canceladas continuam no banco (historico)
+  v_desc := 'T92 ocorrencias canceladas permanecem no historico';
+  select count(*) into v_int from public.agendamentos
+   where ciclico_id = v_ciclico and status = 'CANCELADO';
+  if v_int > 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> sumiram' || E'\n'; end if;
+
+  -- T93 regra ciclica do master so o master desativa
+  v_desc := 'T93 regra ciclica do ADMIN_MASTER so o master desativa'; v_erro := null;
+  v_r := public.fn_ciclico_criar(v_tm, v_p902, v_ub, '01:00', '01:30', 'INTERVALO_DIAS',
+                                 null, 30, null, null, null);
+  begin perform public.fn_ciclico_desativar(v_tadm, (v_r->>'id')::uuid, true);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'REGISTRO_DO_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'desativou!') || E'\n'; end if;
 
   -- ===========================================================================
   -- RELATORIO

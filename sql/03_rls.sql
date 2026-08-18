@@ -31,6 +31,8 @@ alter table public.auditoria             enable row level security;
 alter table public.sessoes               enable row level security;
 alter table public.matriculas_reservadas enable row level security;
 alter table public.configuracao          enable row level security;
+alter table public.fornecedores           enable row level security;
+alter table public.agendamentos_ciclicos enable row level security;
 
 -- Nenhuma politica e criada de proposito: sem politica, RLS nega tudo para os
 -- papeis nao-donos. Toda a superficie util esta nas funcoes RPC.

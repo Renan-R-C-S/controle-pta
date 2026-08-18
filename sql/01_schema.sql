@@ -318,3 +318,140 @@ alter table public.auditoria add constraint auditoria_tipo_acao_valido check (ti
     'NOME_ALTERADO', 'PAPEL_ALTERADO',
     'FUNCIONARIO_DESATIVADO', 'FUNCIONARIO_REATIVADO',
     'LIMITE_MATRICULAS_ALTERADO'));
+
+-- =============================================================================
+-- TERCEIROS (FORNECEDORES)
+--
+-- Empresa ou prestador externo envolvido no uso ou na programacao.
+-- Um registro por uso/agendamento (decisao em docs/DECISOES.md, item 18).
+-- =============================================================================
+create table if not exists public.fornecedores (
+  id          uuid primary key default gen_random_uuid(),
+  nome        text not null,
+  documento   text,
+  ativo       boolean not null default true,
+  criado_em   timestamptz not null default now(),
+  criado_por  uuid references public.funcionarios(id) on delete set null,
+  constraint fornecedores_nome_valido check (char_length(btrim(nome)) between 2 and 80)
+);
+
+-- Nome unico ignorando maiusculas e espacos: evita "Alfa Montagens" e
+-- "alfa montagens " virarem dois cadastros da mesma empresa.
+create unique index if not exists uq_fornecedor_nome
+  on public.fornecedores (lower(btrim(nome)));
+
+alter table public.usos
+  add column if not exists fornecedor_id uuid references public.fornecedores(id) on delete restrict;
+alter table public.agendamentos
+  add column if not exists fornecedor_id uuid references public.fornecedores(id) on delete restrict;
+
+-- =============================================================================
+-- CANCELAMENTO DE USO EM ABERTO
+--
+-- Um administrador pode encerrar um uso que ficou esquecido. Isso NAO e o mesmo
+-- que finalizar: nao existe fim_efetivo, porque ninguem observou o fim real.
+-- O registro fica como CANCELADO, visivel no calendario e no historico.
+-- =============================================================================
+alter table public.usos
+  add column if not exists cancelado_em     timestamptz,
+  add column if not exists cancelado_por    uuid references public.funcionarios(id),
+  add column if not exists motivo_cancelamento text;
+
+alter table public.usos drop constraint if exists usos_status_valido;
+alter table public.usos add constraint usos_status_valido
+  check (status in ('EM_USO', 'FINALIZADO', 'CANCELADO'));
+
+alter table public.usos drop constraint if exists usos_coerencia_status;
+alter table public.usos add constraint usos_coerencia_status check (
+  (status = 'EM_USO'     and fim_efetivo is null) or
+  (status = 'FINALIZADO' and fim_efetivo is not null) or
+  (status = 'CANCELADO'  and fim_efetivo is null and cancelado_em is not null));
+
+-- Os indices de "uso aberto" continuam olhando so para EM_USO, entao um uso
+-- cancelado libera a PTA e libera o funcionario para iniciar outro.
+
+-- =============================================================================
+-- AGENDAMENTOS CICLICOS
+--
+-- Regra de repeticao criada por um administrador em nome de um funcionario.
+-- As ocorrencias sao materializadas como agendamentos comuns, ligadas de volta
+-- pela coluna ciclico_id - assim o calendario, a checagem de conflito e a
+-- sobrescrita pelo QR Code 1 continuam funcionando sem nenhum caso especial.
+-- =============================================================================
+create table if not exists public.agendamentos_ciclicos (
+  id              uuid primary key default gen_random_uuid(),
+  pta_id          uuid not null references public.ptas(id) on delete restrict,
+  funcionario_id  uuid not null references public.funcionarios(id) on delete restrict,
+  hora_inicio     time not null,
+  hora_fim        time not null,
+  tipo            text not null,
+  dias_semana     smallint[],      -- 0=domingo ... 6=sabado (tipo DIAS_SEMANA)
+  intervalo_dias  smallint,        -- a cada N dias        (tipo INTERVALO_DIAS)
+  data_inicio     date not null,
+  data_fim        date,            -- null = sem data final
+  gerado_ate      date,            -- ate onde as ocorrencias ja foram criadas
+  fornecedor_id   uuid references public.fornecedores(id) on delete restrict,
+  ativo           boolean not null default true,
+  criado_por      uuid not null references public.funcionarios(id) on delete restrict,
+  criado_em       timestamptz not null default now(),
+  atualizado_em   timestamptz not null default now(),
+  desativado_em   timestamptz,
+  desativado_por  uuid references public.funcionarios(id),
+  constraint ciclicos_tipo_valido check (tipo in ('DIAS_SEMANA', 'INTERVALO_DIAS')),
+  constraint ciclicos_horario_valido check (hora_fim > hora_inicio),
+  constraint ciclicos_periodo_valido check (data_fim is null or data_fim >= data_inicio),
+  -- Cada tipo exige exatamente o seu proprio parametro
+  constraint ciclicos_parametro_coerente check (
+    (tipo = 'DIAS_SEMANA'    and dias_semana is not null and array_length(dias_semana, 1) between 1 and 7
+                             and intervalo_dias is null) or
+    (tipo = 'INTERVALO_DIAS' and intervalo_dias is not null and intervalo_dias between 1 and 365
+                             and dias_semana is null)),
+  constraint ciclicos_dias_validos check (
+    dias_semana is null or (dias_semana <@ array[0,1,2,3,4,5,6]::smallint[]))
+);
+
+create index if not exists idx_ciclicos_ativos
+  on public.agendamentos_ciclicos (ativo, pta_id) where ativo;
+
+alter table public.agendamentos
+  add column if not exists ciclico_id uuid references public.agendamentos_ciclicos(id) on delete restrict;
+
+create index if not exists idx_agendamentos_ciclico
+  on public.agendamentos (ciclico_id) where ciclico_id is not null;
+
+drop trigger if exists trg_touch_ciclicos on public.agendamentos_ciclicos;
+create trigger trg_touch_ciclicos before update on public.agendamentos_ciclicos
+  for each row execute function public.fn_touch_atualizado_em();
+
+-- =============================================================================
+-- NOVOS PARAMETROS DE CONFIGURACAO
+-- =============================================================================
+
+-- Teto de horas que um uso pode declarar ao ser aberto. Tambem serve de
+-- referencia para destacar, no painel, os usos que ficaram abertos demais.
+-- Definido por qualquer ADMIN (o limite de matriculas continua sendo do MASTER).
+insert into public.configuracao (chave, valor, descricao)
+values ('max_horas_uso_aberto', '14',
+        'Maximo de horas que um uso do QR Code 1 pode declarar/permanecer aberto.')
+on conflict (chave) do nothing;
+
+insert into public.configuracao (chave, valor, descricao)
+values ('horizonte_ciclico_dias', '90',
+        'Quantos dias a frente as ocorrencias de agendamentos ciclicos sao geradas.')
+on conflict (chave) do nothing;
+
+-- =============================================================================
+-- NOVOS TIPOS DE ACAO AUDITAVEL
+-- =============================================================================
+alter table public.auditoria drop constraint if exists auditoria_tipo_acao_valido;
+alter table public.auditoria add constraint auditoria_tipo_acao_valido check (tipo_acao in (
+    'CADASTRO_USUARIO', 'LOGIN', 'LOGIN_FALHA', 'LOGOUT',
+    'AGENDAMENTO_CRIADO', 'AGENDAMENTO_CANCELADO', 'AGENDAMENTO_SOBRESCRITO',
+    'AGENDAMENTO_CONCLUIDO', 'AGENDAMENTO_ALTERADO',
+    'USO_INICIADO', 'USO_FINALIZADO', 'USO_CANCELADO',
+    'OBSERVACAO_CRIADA', 'OBSERVACAO_EDITADA',
+    'NOME_ALTERADO', 'PAPEL_ALTERADO',
+    'FUNCIONARIO_DESATIVADO', 'FUNCIONARIO_REATIVADO',
+    'LIMITE_MATRICULAS_ALTERADO', 'CONFIGURACAO_ALTERADA',
+    'FORNECEDOR_CRIADO',
+    'CICLICO_CRIADO', 'CICLICO_DESATIVADO', 'CICLICO_GERADO'));
