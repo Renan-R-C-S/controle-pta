@@ -16,6 +16,7 @@ import { APP, configuracaoPendente } from './config.js';
 import { criarFluxoLogin } from './login-ui.js';
 import { MINUTOS_DE_PRAZO, prazo, restantes, salvar as salvarObservacao } from './observacoes.js';
 import { listarPtas, normalizarCodigo, parametrosDaUrl, situacao } from './ptas.js';
+import { montarPerfil } from './perfil-ui.js';
 import { agora, dataCurta, duracaoHumana, horaCurta, isoHora, minutosEntre, sincronizarRelogio } from './tempo.js';
 import {
   $, avisar, carregandoGlobal, comCarregamento, confirmar, criar, etiqueta, preencher, mostrarTela, tratarErro,
@@ -280,6 +281,12 @@ function desenharDashboard(funcionario, dados) {
       type: 'button',
       texto: 'MINHA PROGRAMACAO',
       onClick: abrirProgramacao,
+    }),
+    criar('button', {
+      classe: 'btn btn-secundario btn-acao',
+      type: 'button',
+      texto: 'MEU PERFIL',
+      onClick: abrirPerfil,
     }),
   );
 
@@ -615,6 +622,27 @@ async function abrirProgramacao() {
   } catch (erro) {
     tratarErro(erro);
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Meu perfil                                                                  */
+/* -------------------------------------------------------------------------- */
+
+function abrirPerfil() {
+  mostrarTela('tela-perfil');
+  montarPerfil($('#perfil-container'), {
+    // O painel mostra o nome do funcionario; redesenha para refletir a mudanca.
+    aoAlterar: () => abrirDashboard(),
+  });
+
+  $('#perfil-container').append(
+    criar('button', {
+      classe: 'btn btn-texto',
+      type: 'button',
+      texto: 'Voltar ao painel da PTA',
+      onClick: () => abrirDashboard(),
+    }),
+  );
 }
 
 /* -------------------------------------------------------------------------- */
