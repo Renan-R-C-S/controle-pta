@@ -64,6 +64,13 @@
         <button id="btn-auditoria" class="btn btn-secundario" type="button">AUDITORIA</button>
       </div>
 
+      <div class="grupo-botoes-linha">
+        <button id="btn-perfil" class="btn btn-secundario" type="button" hidden>MEU PERFIL</button>
+        <!-- Aparece apenas para administradores. A permissao real e conferida
+             no banco a cada chamada, nao aqui. -->
+        <button id="btn-admin" class="btn btn-secundario" type="button" hidden>ADMINISTRACAO</button>
+      </div>
+
       <p class="dica rodape-nota">
         O uso registrado no QR Code da propria PTA tem prioridade sobre a programacao.
         Programacoes afetadas continuam visiveis, marcadas no historico.
@@ -93,6 +100,24 @@
     <section id="tela-auditoria" class="tela">
       <h2 class="titulo-passo">Auditoria</h2>
       <div id="auditoria-corpo"></div>
+      <button class="btn btn-texto" type="button" data-voltar-calendario>Voltar ao calendario</button>
+    </section>
+
+    <!-- ===================================================================
+         TELA — meu perfil (alterar o proprio nome)
+         =================================================================== -->
+    <section id="tela-perfil" class="tela">
+      <h2 class="titulo-passo">Meu perfil</h2>
+      <div id="perfil-container"></div>
+      <button class="btn btn-texto" type="button" data-voltar-calendario>Voltar ao calendario</button>
+    </section>
+
+    <!-- ===================================================================
+         TELA — administracao (somente ADMIN / ADMIN_MASTER)
+         =================================================================== -->
+    <section id="tela-admin" class="tela">
+      <h2 class="titulo-passo">Administracao</h2>
+      <div id="admin-corpo"></div>
       <button class="btn btn-texto" type="button" data-voltar-calendario>Voltar ao calendario</button>
     </section>
 
