@@ -208,3 +208,98 @@ nada: o status vira `CANCELADO`, com data e evento de auditoria.
 **Por quê.** Coerente com o item 31 ("impedir alteração de registros de outros
 usuários"). Um perfil de supervisor com poder de cancelar por terceiros é uma
 evolução natural, mas exigiria um modelo de papéis que o MVP não tem.
+
+---
+
+## 13. "Excluir" é desativar, nunca apagar
+
+**Ambiguidade.** O pedido foi que administradores possam *excluir* funcionários
+e programações, mas que *não alterem o histórico nem a auditoria*.
+
+**Decisão.** Excluir marca como inativo (funcionário) ou `CANCELADO`
+(programação). Nenhuma linha sai do banco.
+
+**Por quê.** Os dois pedidos são incompatíveis se "excluir" for `DELETE`. Um
+funcionário é referenciado por `usos`, `agendamentos` e `auditoria`; apagá-lo
+exigiria apagar os registros dele — exatamente o histórico que deve ser
+preservado. As chaves estrangeiras são `on delete restrict` justamente para
+tornar isso impossível por acidente.
+
+**Efeito prático.** Idêntico ao esperado: some da lista, não entra mais, sessões
+encerradas, programações futuras canceladas, vaga liberada no limite. E com um
+ganho: dá para reativar quem foi excluído por engano.
+
+---
+
+## 14. O administrador principal é intocável
+
+**Decisão.** Ninguém — nem outro administrador, nem ele mesmo — altera o papel
+ou desativa quem tem `ADMIN_MASTER`.
+
+**Por quê.** Sem essa trava o sistema pode chegar a um estado do qual não sai
+sozinho: dois administradores se revogam mutuamente, ou o único master se
+desativa por engano, e não sobra ninguém capaz de conceder papéis. A saída seria
+mexer no banco por fora, o que é pior.
+
+**Consequência.** Trocar quem é o administrador principal exige SQL direto —
+operação rara e deliberada, como deve ser.
+
+**Também bloqueado:** alterar o próprio papel. Um `ADMIN` que pudesse se promover
+tornaria a distinção entre os dois níveis decorativa.
+
+---
+
+## 15. Matrículas administrativas reservadas
+
+**Ambiguidade.** Como as matrículas 0591/0592/0593 viram administradoras se o
+sistema é de autocadastro e ninguém é admin no começo?
+
+**Decisão.** Uma tabela `matriculas_reservadas` define, por matrícula, o papel
+que a pessoa recebe **no momento do cadastro**.
+
+**Por quê.** As alternativas eram piores: uma tela de "criar primeiro admin"
+seria um buraco de segurança aberto; deixar o papel amarrado à string da
+matrícula em código espalharia a regra pelo sistema.
+
+**O risco que isso carrega, explicitamente.** Quem se cadastrar *primeiro* com
+uma matrícula reservada assume o papel. Num sistema de autocadastro isso é
+inevitável — está documentado no README e na própria tela de administração, que
+mostra quais reservas ainda não foram usadas.
+
+**Mitigação recomendada:** essas pessoas fazem o primeiro acesso no dia da
+implantação, antes de o QR Code ser liberado. Se algo der errado, o
+administrador principal exclui o cadastro indevido e a matrícula fica livre de
+novo.
+
+---
+
+## 16. Nome é editável, matrícula não
+
+**Decisão.** O funcionário altera o próprio nome. A matrícula não muda por
+nenhuma tela.
+
+**Por quê.** O nome é rótulo — erro de digitação, nome de casada, abreviação
+ruim. Corrigi-lo não muda o significado de nenhum registro passado, e a troca
+fica auditada com o valor anterior.
+
+A matrícula é identidade. É ela que liga o registro à pessoa real da fábrica, e
+é por ela que se procura alguém no histórico. Trocá-la faria os usos antigos
+passarem a apontar para outra pessoa — reescrita de histórico com outro nome.
+
+**Matrícula errada** se resolve excluindo o cadastro e criando outro. O histórico
+do cadastro antigo permanece, corretamente atribuído a ele.
+
+---
+
+## 17. Alteração de programação exige horário futuro
+
+**Decisão.** `fn_agendamento_alterar` recusa mover uma programação para um
+horário que já passou, inclusive para administradores.
+
+**Por quê.** Programação é planejamento. Remarcar algo para o passado é registrar
+que aconteceu — e o que aconteceu de fato mora em `usos`, alimentado pelo QR
+Code 1. Permitir isso abriria a porta para "consertar" o passado pela agenda,
+que é justamente o que a separação entre planejado e efetivo existe para evitar.
+
+**Consequência.** Uma programação que não foi cumprida não vira uso. Ela fica
+como está, e o histórico mostra a diferença — que é a informação útil.
