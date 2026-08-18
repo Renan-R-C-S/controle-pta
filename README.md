@@ -346,7 +346,87 @@ O relatório sai na mensagem final e nada é gravado.
 
 ---
 
-## 9. Limites conhecidos deste MVP
+## 10. Perfis de acesso e administração
+
+Três níveis:
+
+| Papel | Pode |
+|---|---|
+| **Funcionário** | usar as PTAs, agendar, alterar e cancelar as **próprias** programações, corrigir o próprio nome |
+| **Administrador** | tudo acima + alterar e excluir **qualquer** programação, excluir e reativar funcionários, promover alguém a administrador |
+| **Administrador principal** | tudo acima + **revogar** o papel de administrador e definir o limite de matrículas |
+
+Nenhum papel altera auditoria ou histórico. Os gatilhos de imutabilidade valem
+para todo mundo, incluindo o dono do banco.
+
+### Como o primeiro administrador nasce
+
+Não existe uma tela para "criar o primeiro admin" — seria um buraco de
+segurança. Em vez disso, três matrículas já vêm **reservadas** em
+`sql/04_seed.sql`:
+
+| Matrícula | Papel |
+|---|---|
+| `0591` | Administrador principal |
+| `0592` | Administrador |
+| `0593` | Administrador |
+
+Quando alguém se cadastra com uma dessas matrículas, já entra com o papel.
+Daí em diante, o administrador principal promove quem mais precisar pela tela
+de administração.
+
+> ⚠️ **Passo obrigatório na implantação.** Quem cadastrar *primeiro* uma dessas
+> matrículas assume o papel. Peça a essas três pessoas que façam o primeiro
+> acesso **antes** de liberar o QR Code para o resto da fábrica.
+
+Para reservar outras matrículas:
+
+```sql
+insert into public.matriculas_reservadas (matricula, papel)
+values ('0594', 'ADMIN');
+```
+
+### "Excluir" significa desativar
+
+Tanto para funcionários quanto para programações, excluir **não apaga a linha
+do banco** — marca como inativo/cancelado.
+
+Isso não é meia-implementação: é a única forma de atender "administradores podem
+excluir" e "ninguém altera o histórico" ao mesmo tempo. Apagar um funcionário
+destruiria os registros de uso dele; apagar uma programação destruiria o rastro
+de quem a sobrescreveu.
+
+Na prática o efeito operacional é o mesmo:
+
+- o funcionário some da lista de login e não consegue mais entrar;
+- as sessões abertas dele são encerradas na hora;
+- as programações futuras dele são canceladas, liberando os horários;
+- a vaga volta a contar no limite de matrículas;
+- os usos e a auditoria dele continuam íntegros.
+
+Um funcionário excluído por engano pode ser reativado por qualquer administrador.
+
+### Limite de matrículas
+
+Só o administrador principal define. `0` significa sem limite.
+
+O limite conta funcionários **ativos** — excluir alguém libera vaga. Não é
+possível definir um teto abaixo do número atual de ativos, para o sistema nunca
+ficar num estado que ele próprio não consegue corrigir.
+
+### Nome sim, matrícula não
+
+Qualquer funcionário corrige o próprio nome em **MEU PERFIL** (erro de digitação,
+nome de casada). A troca fica auditada com o valor anterior.
+
+A matrícula não muda por lá, e isso é proposital: ela é a identidade do registro,
+referenciada por usos, agendamentos e auditoria. Trocá-la seria reescrever
+histórico. Matrícula errada se resolve excluindo o cadastro e criando outro — o
+histórico do antigo permanece.
+
+---
+
+## 11. Limites conhecidos deste MVP
 
 Registrados aqui de forma explícita, conforme o item 47 do escopo:
 
