@@ -186,9 +186,14 @@ create table if not exists public.auditoria (
   constraint auditoria_tipo_acao_valido check (tipo_acao in (
       'CADASTRO_USUARIO', 'LOGIN', 'LOGIN_FALHA', 'LOGOUT',
       'AGENDAMENTO_CRIADO', 'AGENDAMENTO_CANCELADO', 'AGENDAMENTO_SOBRESCRITO',
-      'AGENDAMENTO_CONCLUIDO',
-      'USO_INICIADO', 'USO_FINALIZADO',
-      'OBSERVACAO_CRIADA', 'OBSERVACAO_EDITADA'))
+      'AGENDAMENTO_CONCLUIDO', 'AGENDAMENTO_ALTERADO',
+      'USO_INICIADO', 'USO_FINALIZADO', 'USO_CANCELADO',
+      'OBSERVACAO_CRIADA', 'OBSERVACAO_EDITADA',
+      'NOME_ALTERADO', 'PAPEL_ALTERADO',
+      'FUNCIONARIO_DESATIVADO', 'FUNCIONARIO_REATIVADO',
+      'LIMITE_MATRICULAS_ALTERADO', 'CONFIGURACAO_ALTERADA',
+      'FORNECEDOR_CRIADO',
+      'CICLICO_CRIADO', 'CICLICO_DESATIVADO', 'CICLICO_GERADO'))
 );
 
 create index if not exists idx_auditoria_ocorrido on public.auditoria (ocorrido_em desc);
@@ -307,17 +312,10 @@ values ('limite_matriculas', '0',
         'Maximo de funcionarios ativos. 0 = sem limite. Somente o ADMIN_MASTER altera.')
 on conflict (chave) do nothing;
 
--- Novos tipos de acao auditavel (REGRA 15)
-alter table public.auditoria drop constraint if exists auditoria_tipo_acao_valido;
-alter table public.auditoria add constraint auditoria_tipo_acao_valido check (tipo_acao in (
-    'CADASTRO_USUARIO', 'LOGIN', 'LOGIN_FALHA', 'LOGOUT',
-    'AGENDAMENTO_CRIADO', 'AGENDAMENTO_CANCELADO', 'AGENDAMENTO_SOBRESCRITO',
-    'AGENDAMENTO_CONCLUIDO', 'AGENDAMENTO_ALTERADO',
-    'USO_INICIADO', 'USO_FINALIZADO',
-    'OBSERVACAO_CRIADA', 'OBSERVACAO_EDITADA',
-    'NOME_ALTERADO', 'PAPEL_ALTERADO',
-    'FUNCIONARIO_DESATIVADO', 'FUNCIONARIO_REATIVADO',
-    'LIMITE_MATRICULAS_ALTERADO'));
+-- A lista de tipos de acao auditavel tem UMA definicao so, no fim deste
+-- arquivo. Manter uma lista parcial aqui quebrava a reaplicacao: num banco que
+-- ja tivesse auditoria dos tipos novos, o ADD CONSTRAINT era recusado pelas
+-- proprias linhas ja gravadas.
 
 -- =============================================================================
 -- TERCEIROS (FORNECEDORES)
