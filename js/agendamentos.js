@@ -22,6 +22,20 @@ export async function criar({ ptaId, data, horaInicio, horaFim }) {
   });
 }
 
+/**
+ * Altera data e horario de uma programacao ainda ativa.
+ * Permitido ao autor e a qualquer administrador (a checagem e feita no banco).
+ */
+export async function alterar({ agendamentoId, data, horaInicio, horaFim }) {
+  return rpc('fn_agendamento_alterar', {
+    p_token: tokenAtual(),
+    p_agendamento_id: agendamentoId,
+    p_data: data,
+    p_hora_inicio: horaInicio,
+    p_hora_fim: horaFim,
+  });
+}
+
 export async function cancelar(agendamentoId) {
   return rpc('fn_agendamento_cancelar', {
     p_token: tokenAtual(),
