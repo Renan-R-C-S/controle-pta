@@ -15,7 +15,7 @@
 import { cadastrar, entrar, listarFuncionarios, listarSetores, matriculaDisponivel } from './auth.js';
 import { APP } from './config.js';
 import { avisar, comCarregamento, criar, preencher, tratarErro } from './ui.js';
-import { matriculaValida, nomeValido, pinValido } from './validacoes.js';
+import { matriculaValida, nomeValido, normalizarMatricula, pinValido } from './validacoes.js';
 
 export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
   const estado = { setor: null, setores: [], funcionarios: [], funcionario: null };
@@ -239,6 +239,19 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
       type: 'tel',
       inputmode: 'numeric',
       maxlength: '10',
+    });
+
+    // Matricula curta e completada com zeros. A pessoa ve isso ANTES de
+    // confirmar, para nao estranhar depois um numero diferente do que digitou.
+    const dicaMatricula = criar('p', { classe: 'dica', hidden: true });
+    matricula.bloco.append(dicaMatricula);
+    matricula.input.addEventListener('input', () => {
+      const digitado = matricula.input.value.trim();
+      const completa = /^[0-9]{1,3}$/.test(digitado);
+      dicaMatricula.hidden = !completa;
+      if (completa) {
+        dicaMatricula.textContent = `Sera salva como ${normalizarMatricula(digitado)}.`;
+      }
     });
     const pin = campoTexto({
       id: 'cad-pin',

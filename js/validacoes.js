@@ -15,9 +15,21 @@ export function pinValido(pin) {
   return new RegExp(`^[0-9]{${APP.digitosPin}}$`).test(pin ?? '');
 }
 
-/** Matricula: 4 a 10 digitos numericos. */
+/**
+ * Completa a matricula com zeros a esquerda ate 4 digitos:
+ *     '590' -> '0590'     '20' -> '0020'     '5' -> '0005'
+ *
+ * De 4 digitos para cima nada muda. Repare que padStart nunca corta o texto -
+ * ao contrario do lpad do Postgres, que trunca e por isso exige um teste de
+ * comprimento no lado do banco.
+ */
+export function normalizarMatricula(matricula) {
+  return (matricula ?? '').trim().padStart(4, '0');
+}
+
+/** Matricula: 1 a 10 digitos numericos (abaixo de 4, recebe zeros a esquerda). */
 export function matriculaValida(matricula) {
-  return /^[0-9]{4,10}$/.test((matricula ?? '').trim());
+  return /^[0-9]{1,10}$/.test((matricula ?? '').trim());
 }
 
 export function nomeValido(nome) {

@@ -16,7 +16,7 @@
 import { rpc } from './api.js';
 import { APP } from './config.js';
 import { ErroApp } from './erros.js';
-import { pinValido, validarCadastro } from './validacoes.js';
+import { normalizarMatricula, pinValido, validarCadastro } from './validacoes.js';
 
 let sessaoAtual = null;
 
@@ -108,7 +108,9 @@ export async function cadastrar({ nome, matricula, pin, confirmacao, setorId }) 
 
   const resposta = await rpc('fn_cadastrar_funcionario', {
     p_nome: nome.trim(),
-    p_matricula: matricula.trim(),
+    // O banco normaliza de novo; aqui e so para o valor enviado bater com o
+    // que a tela mostrou a pessoa antes de confirmar.
+    p_matricula: normalizarMatricula(matricula),
     p_pin: pin,
     p_setor_id: setorId,
   });

@@ -23,7 +23,7 @@ const MENSAGENS = {
   SESSAO_INVALIDA: 'Sua sessao expirou. Entre novamente.',
   FUNCIONARIO_NAO_ENCONTRADO: 'Colaborador nao encontrado.',
   NOME_INVALIDO: 'Informe o nome completo (minimo 3 caracteres).',
-  MATRICULA_FORMATO: 'A matricula deve ter de 4 a 10 digitos numericos.',
+  MATRICULA_FORMATO: 'A matricula deve ter apenas numeros, ate 10 digitos.',
   MATRICULA_DUPLICADA: 'Esta matricula ja esta cadastrada.',
   PIN_FORMATO: 'O PIN deve ter exatamente 4 digitos numericos.',
   PIN_INCORRETO: 'PIN incorreto.',
