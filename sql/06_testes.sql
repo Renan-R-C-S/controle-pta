@@ -1,0 +1,444 @@
+-- =============================================================================
+-- SISTEMA DE CONTROLE E AGENDAMENTO DE PTA
+-- Arquivo 06 - BATERIA DE TESTES AUTOMATIZADOS (item 46)
+--
+-- COMO LER O RESULTADO
+-- Este script termina DE PROPOSITO com um erro chamado
+-- "RELATORIO_DE_TESTES__NADA_FOI_GRAVADO". Esse erro serve para desfazer
+-- (rollback) tudo o que os testes criaram - nenhum dado de teste fica no banco.
+-- O RELATORIO COMPLETO ESTA NO CORPO DA MENSAGEM DESSE ERRO.
+--
+-- Se aparecer alguma linha [FALHA], a regra correspondente nao esta ativa.
+--
+-- QUANDO RODAR
+-- Varios testes iniciam usos que terminam 1 a 2 horas depois do horario atual.
+-- Como o MVP trabalha com uso dentro do mesmo dia (ver docs/DECISOES.md), rodar
+-- este script depois das 21h faz esses casos falharem por virada de data - o
+-- que e comportamento correto do sistema, nao defeito. Rode durante o dia.
+-- =============================================================================
+
+-- O search_path abaixo garante que as classes de operador do btree_gist e as
+-- funcoes do pgcrypto sejam encontradas, independentemente do schema em que as
+-- extensoes foram instaladas neste projeto.
+set search_path = public, extensions;
+
+do $$
+declare
+  v_rel      text := E'\n';
+  v_ok       int  := 0;
+  v_falha    int  := 0;
+  v_erro     text;
+  v_desc     text;
+  v_setor    uuid;
+  v_p901     uuid; v_p902 uuid; v_p903 uuid;
+  v_ua       uuid; v_ub uuid; v_uc uuid;
+  v_ta       uuid; v_tb uuid; v_tc uuid;
+  v_r        jsonb;
+  v_uso_a    uuid;
+  v_uso_b    uuid;
+  v_ag_b     uuid;
+  v_ag_hoje  uuid;
+  v_amanha   date := (now() at time zone public.fn_tz())::date + 1;
+  v_ontem    date := (now() at time zone public.fn_tz())::date - 1;
+  v_i        int;
+  v_txt      text;
+  v_bool     boolean;
+  v_int      int;
+begin
+  -- ===========================================================================
+  -- PREPARACAO (tudo sera desfeito no final)
+  -- ===========================================================================
+  insert into public.setores (nome, ordem) values ('TESTE_AUTOMATIZADO', 99)
+  returning id into v_setor;
+
+  insert into public.ptas (codigo, descricao) values ('PTA-901', 'Teste 1') returning id into v_p901;
+  insert into public.ptas (codigo, descricao) values ('PTA-902', 'Teste 2') returning id into v_p902;
+  insert into public.ptas (codigo, descricao) values ('PTA-903', 'Teste 3') returning id into v_p903;
+
+  v_rel := v_rel || E'===========================================================\n';
+  v_rel := v_rel || E' RELATORIO DE TESTES - CONTROLE DE PTA\n';
+  v_rel := v_rel || E'===========================================================\n';
+  v_rel := v_rel || E'\n-- USUARIO -------------------------------------------\n';
+
+  -- ===========================================================================
+  -- USUARIO
+  -- ===========================================================================
+
+  -- T01 cadastro novo (REGRA 1, 2, 3)
+  v_desc := 'T01 cadastro de funcionario novo'; v_erro := null;
+  begin
+    v_r := public.fn_cadastrar_funcionario('Teste Alfa', '900001', '1111', v_setor);
+    v_ta := (v_r->>'token')::uuid;
+    v_ua := (v_r->'funcionario'->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_ta is not null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'sem token') || E'\n'; end if;
+
+  -- T02 matricula duplicada (REGRA 1)
+  v_desc := 'T02 matricula duplicada e recusada'; v_erro := null;
+  begin
+    perform public.fn_cadastrar_funcionario('Outro Nome', '900001', '9999', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'MATRICULA_DUPLICADA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T03 PIN com 3 digitos (REGRA 2)
+  v_desc := 'T03 PIN de 3 digitos e recusado'; v_erro := null;
+  begin
+    perform public.fn_cadastrar_funcionario('Teste Curto', '900011', '123', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PIN_FORMATO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T04 PIN com letra (REGRA 2)
+  v_desc := 'T04 PIN com letra e recusado'; v_erro := null;
+  begin
+    perform public.fn_cadastrar_funcionario('Teste Letra', '900012', '12A4', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PIN_FORMATO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T05 o PIN nao fica em texto puro (REGRA 3)
+  v_desc := 'T05 PIN gravado apenas como hash bcrypt'; v_erro := null;
+  select pin_hash into v_txt from public.funcionarios where id = v_ua;
+  if v_txt is not null and v_txt <> '1111' and v_txt like '$2%' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_txt, 'nulo') || E'\n'; end if;
+
+  -- usuarios auxiliares
+  v_r := public.fn_cadastrar_funcionario('Teste Beta',  '900002', '2222', v_setor);
+  v_tb := (v_r->>'token')::uuid; v_ub := (v_r->'funcionario'->>'id')::uuid;
+  v_r := public.fn_cadastrar_funcionario('Teste Gama',  '900003', '3333', v_setor);
+  v_tc := (v_r->>'token')::uuid; v_uc := (v_r->'funcionario'->>'id')::uuid;
+
+  -- T06 login correto
+  v_desc := 'T06 login com PIN correto'; v_erro := null;
+  begin
+    v_r := public.fn_login(v_ua, '1111');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'ok')::boolean and (v_r->>'token') is not null then
+    v_ta := (v_r->>'token')::uuid;
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T07 login incorreto
+  v_desc := 'T07 login com PIN incorreto e recusado'; v_erro := null;
+  begin
+    v_r := public.fn_login(v_ua, '9999');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'ok')::boolean is false and v_r->>'erro' = 'PIN_INCORRETO' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T08 bloqueio apos 5 tentativas (item 8)
+  v_desc := 'T08 conta bloqueia apos 5 tentativas invalidas'; v_erro := null;
+  for v_i in 1..5 loop
+    begin v_r := public.fn_login(v_uc, '0000'); exception when others then v_erro := sqlerrm; end;
+  end loop;
+  if v_r->>'erro' = 'CONTA_BLOQUEADA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T09 contador de tentativas foi realmente persistido
+  v_desc := 'T09 tentativas invalidas ficam gravadas (nao sofrem rollback)';
+  select tentativas_falhas into v_int from public.funcionarios where id = v_uc;
+  if v_int >= 5 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> contador=' || v_int || E'\n'; end if;
+
+  -- T10 sessao invalida
+  v_desc := 'T10 token invalido e rejeitado'; v_erro := null;
+  begin perform public.fn_sessao_info(gen_random_uuid());
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SESSAO_INVALIDA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  v_rel := v_rel || E'\n-- QR CODE 1 (USO IMEDIATO) --------------------------\n';
+
+  -- ===========================================================================
+  -- QR CODE 1
+  -- ===========================================================================
+
+  -- T11 PTA inexistente (REGRA 4)
+  v_desc := 'T11 PTA inexistente retorna erro'; v_erro := null;
+  begin perform public.fn_pta_situacao('PTA-999', v_ta);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PTA_NAO_ENCONTRADA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T12 PTA valida + normalizacao do parametro do QR ("pta901" -> "PTA-901")
+  v_desc := 'T12 PTA valida disponivel (aceita codigo sem hifen)'; v_erro := null;
+  begin v_r := public.fn_pta_situacao('pta901', v_ta);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_r->>'status' = 'DISPONIVEL' and v_r->'pta'->>'codigo' = 'PTA-901' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T13 horario final anterior ao inicial (item 12)
+  v_desc := 'T13 fim pretendido no passado e recusado'; v_erro := null;
+  begin
+    perform public.fn_uso_iniciar(v_ta, 'PTA-901',
+      (to_char(now() at time zone public.fn_tz() - interval '1 hour', 'HH24:MI'))::time);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'HORARIO_FINAL_ANTERIOR' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T14 inicio de uso (REGRA 5, 8, 9)
+  v_desc := 'T14 inicio de uso pelo QR Code 1'; v_erro := null;
+  begin
+    v_r := public.fn_uso_iniciar(v_ta, 'PTA-901',
+      (to_char(now() at time zone public.fn_tz() + interval '90 minutes', 'HH24:MI'))::time);
+    v_uso_a := (v_r->>'uso_id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_uso_a is not null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'sem uso') || E'\n'; end if;
+
+  -- T15 uso fica ABERTO com fim_efetivo nulo (REGRA 10, 12)
+  v_desc := 'T15 uso nasce EM_USO com fim_efetivo nulo';
+  select (status = 'EM_USO' and fim_efetivo is null) into v_bool from public.usos where id = v_uso_a;
+  if v_bool then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || E'\n'; end if;
+
+  -- T16 PTA ja em uso por outra pessoa
+  v_desc := 'T16 segundo uso na mesma PTA e bloqueado'; v_erro := null;
+  begin
+    perform public.fn_uso_iniciar(v_tb, 'PTA-901',
+      (to_char(now() at time zone public.fn_tz() + interval '2 hours', 'HH24:MI'))::time);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PTA_EM_USO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T17 usuario ja possui uso aberto em outra PTA
+  v_desc := 'T17 usuario com uso aberto nao inicia outro'; v_erro := null;
+  begin
+    perform public.fn_uso_iniciar(v_ta, 'PTA-902',
+      (to_char(now() at time zone public.fn_tz() + interval '2 hours', 'HH24:MI'))::time);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'USUARIO_COM_USO_ABERTO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T18 observacao acima de 200 caracteres (REGRA 13)
+  v_desc := 'T18 observacao com 201 caracteres e recusada'; v_erro := null;
+  begin perform public.fn_observacao_salvar(v_ta, v_uso_a, repeat('x', 201));
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'OBSERVACAO_LONGA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T19 observacao valida durante o uso
+  v_desc := 'T19 observacao valida e aceita durante o uso'; v_erro := null;
+  begin perform public.fn_observacao_salvar(v_ta, v_uso_a, 'Necessario reposicionar a PTA.');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_erro || E'\n'; end if;
+
+  -- T20 finalizar uso de outra pessoa (item 31)
+  v_desc := 'T20 finalizar uso de outro funcionario e bloqueado'; v_erro := null;
+  begin perform public.fn_uso_finalizar(v_tb, v_uso_a);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T21 finalizacao ANTES do horario pretendido (item 15, REGRA 10 e 11)
+  v_desc := 'T21 finalizacao antes do previsto grava a hora real'; v_erro := null;
+  begin v_r := public.fn_uso_finalizar(v_ta, v_uso_a);
+  exception when others then v_erro := sqlerrm; end;
+  select (fim_efetivo is not null and fim_efetivo < fim_pretendido and status = 'FINALIZADO')
+    into v_bool from public.usos where id = v_uso_a;
+  if v_erro is null and v_bool and (v_r->>'ultrapassou_previsto')::boolean is false then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T22 nao permite finalizar duas vezes
+  v_desc := 'T22 uso ja finalizado nao finaliza de novo'; v_erro := null;
+  begin perform public.fn_uso_finalizar(v_ta, v_uso_a);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'USO_JA_FINALIZADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T23 observacao dentro dos 30 minutos (REGRA 14)
+  v_desc := 'T23 observacao editavel dentro dos 30 minutos'; v_erro := null;
+  begin perform public.fn_observacao_salvar(v_ta, v_uso_a, 'Observacao editada logo apos finalizar.');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_erro || E'\n'; end if;
+
+  -- T24 observacao apos os 30 minutos (REGRA 14)
+  -- Empurra o limite para o passado para simular a passagem do tempo.
+  v_desc := 'T24 observacao bloqueada apos 30 minutos do fim efetivo'; v_erro := null;
+  update public.usos set limite_edicao_observacao = now() - interval '1 minute' where id = v_uso_a;
+  begin perform public.fn_observacao_salvar(v_ta, v_uso_a, 'Tentativa fora do prazo.');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'OBSERVACAO_PRAZO_EXPIRADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T25 finalizacao DEPOIS do horario pretendido (item 16)
+  v_desc := 'T25 finalizacao apos o previsto e registrada como ultrapassagem'; v_erro := null;
+  begin
+    v_r := public.fn_uso_iniciar(v_ta, 'PTA-902',
+      (to_char(now() at time zone public.fn_tz() + interval '60 minutes', 'HH24:MI'))::time);
+    v_uso_b := (v_r->>'uso_id')::uuid;
+    -- simula um uso que comecou ha 2 horas e deveria ter terminado ha 1 hora
+    update public.usos
+       set inicio_efetivo = now() - interval '2 hours',
+           fim_pretendido = now() - interval '1 hour'
+     where id = v_uso_b;
+    v_r := public.fn_uso_finalizar(v_ta, v_uso_b);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'ultrapassou_previsto')::boolean then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T26 o horario pretendido nao foi sobrescrito pelo efetivo (REGRA 11)
+  v_desc := 'T26 fim_pretendido e fim_efetivo permanecem distintos';
+  select (fim_pretendido <> fim_efetivo) into v_bool from public.usos where id = v_uso_b;
+  if v_bool then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || E'\n'; end if;
+
+  v_rel := v_rel || E'\n-- QR CODE 2 (AGENDAMENTO) --------------------------\n';
+
+  -- ===========================================================================
+  -- QR CODE 2
+  -- ===========================================================================
+
+  -- T27 criacao de agendamento (REGRA 6)
+  v_desc := 'T27 criacao de agendamento futuro'; v_erro := null;
+  begin v_r := public.fn_agendamento_criar(v_ta, v_p903, v_amanha, '08:00', '10:00');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_erro || E'\n'; end if;
+
+  -- T28 conflito de horario (REGRA 17)
+  v_desc := 'T28 agendamento sobreposto (09:00-11:00) e bloqueado'; v_erro := null;
+  begin perform public.fn_agendamento_criar(v_tb, v_p903, v_amanha, '09:00', '11:00');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'CONFLITO_AGENDAMENTO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T29 horario encostado nao e conflito (10:00-12:00 apos 08:00-10:00)
+  v_desc := 'T29 agendamento adjacente (10:00-12:00) e permitido'; v_erro := null;
+  begin
+    v_r := public.fn_agendamento_criar(v_tb, v_p903, v_amanha, '10:00', '12:00');
+    v_ag_b := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_erro || E'\n'; end if;
+
+  -- T30 agendamento no passado
+  v_desc := 'T30 agendamento em data passada e recusado'; v_erro := null;
+  begin perform public.fn_agendamento_criar(v_ta, v_p903, v_ontem, '08:00', '10:00');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'AGENDAMENTO_PASSADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T31 fim anterior ao inicio
+  v_desc := 'T31 agendamento com fim antes do inicio e recusado'; v_erro := null;
+  begin perform public.fn_agendamento_criar(v_ta, v_p903, v_amanha, '14:00', '13:00');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'HORARIO_FINAL_ANTERIOR' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T32 cancelar agendamento de outra pessoa
+  v_desc := 'T32 cancelar agendamento de outro funcionario e bloqueado'; v_erro := null;
+  begin perform public.fn_agendamento_cancelar(v_ta, v_ag_b);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  v_rel := v_rel || E'\n-- SOBRESCRITA QR1 > QR2 ----------------------------\n';
+
+  -- ===========================================================================
+  -- SOBRESCRITA (REGRA 7 e 18)
+  -- ===========================================================================
+
+  -- Programacao de Beta para daqui a pouco, na PTA-903.
+  insert into public.agendamentos (pta_id, funcionario_id, data_ref, inicio_planejado, fim_planejado)
+  values (v_p903, v_ub, (now() at time zone public.fn_tz())::date,
+          now() + interval '20 minutes', now() + interval '3 hours')
+  returning id into v_ag_hoje;
+
+  -- Alfa chega antes e inicia o uso imediato pelo QR Code 1.
+  v_desc := 'T33 uso imediato do QR1 prevalece sobre o agendamento do QR2'; v_erro := null;
+  begin
+    v_r := public.fn_uso_iniciar(v_ta, 'PTA-903',
+      (to_char(now() at time zone public.fn_tz() + interval '120 minutes', 'HH24:MI'))::time);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'agendamentos_afetados')::int = 1 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T34 o agendamento anterior NAO foi apagado (REGRA 18)
+  v_desc := 'T34 agendamento anterior preservado e marcado como afetado';
+  select status into v_txt from public.agendamentos where id = v_ag_hoje;
+  if v_txt = 'AFETADO_POR_USO_IMEDIATO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> status=' || coalesce(v_txt, 'APAGADO!') || E'\n'; end if;
+
+  -- T35 vinculo de rastreabilidade gravado
+  v_desc := 'T35 vinculo uso <-> agendamento afetado registrado';
+  select count(*) into v_int from public.agendamentos_afetados where agendamento_id = v_ag_hoje;
+  if v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' vinculos' || E'\n'; end if;
+
+  v_rel := v_rel || E'\n-- AUDITORIA ----------------------------------------\n';
+
+  -- ===========================================================================
+  -- AUDITORIA (REGRA 15 e 16)
+  -- ===========================================================================
+
+  -- T36 auditoria da sobrescrita com valor anterior e novo
+  v_desc := 'T36 auditoria da sobrescrita guarda valor anterior e novo';
+  select count(*) into v_int
+    from public.auditoria
+   where tipo_acao = 'AGENDAMENTO_SOBRESCRITO'
+     and registro_id = v_ag_hoje::text
+     and dados_anteriores is not null
+     and dados_novos is not null;
+  if v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' registros' || E'\n'; end if;
+
+  -- T37 eventos principais auditados
+  v_desc := 'T37 cadastro, login, uso e agendamento geram auditoria';
+  select count(distinct tipo_acao) into v_int
+    from public.auditoria
+   where tipo_acao in ('CADASTRO_USUARIO','LOGIN','LOGIN_FALHA','USO_INICIADO',
+                       'USO_FINALIZADO','AGENDAMENTO_CRIADO','OBSERVACAO_CRIADA',
+                       'OBSERVACAO_EDITADA','AGENDAMENTO_SOBRESCRITO');
+  if v_int >= 8 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' tipos)' || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> apenas ' || v_int || ' tipos' || E'\n'; end if;
+
+  -- T38 auditoria nao pode ser apagada (REGRA 16)
+  v_desc := 'T38 auditoria nao pode ser apagada'; v_erro := null;
+  begin delete from public.auditoria where tipo_acao = 'LOGIN';
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'HISTORICO_IMUTAVEL' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'apagou!') || E'\n'; end if;
+
+  -- T39 auditoria nao pode ser alterada (REGRA 16)
+  v_desc := 'T39 auditoria nao pode ser alterada'; v_erro := null;
+  begin update public.auditoria set descricao = 'adulterado' where tipo_acao = 'LOGIN';
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'HISTORICO_IMUTAVEL' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'alterou!') || E'\n'; end if;
+
+  -- T40 consulta do calendario devolve agendamentos e usos separados (REGRA 11)
+  v_desc := 'T40 calendario separa AGENDAMENTO de USO';
+  select count(distinct tipo) into v_int
+    from public.fn_agenda_dia((now() at time zone public.fn_tz())::date, null);
+  if v_int = 2 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' tipos' || E'\n'; end if;
+
+  -- ===========================================================================
+  -- RELATORIO
+  -- ===========================================================================
+  v_rel := v_rel || E'\n===========================================================\n';
+  v_rel := v_rel || ' TOTAL: ' || (v_ok + v_falha) || ' testes | OK: ' || v_ok || ' | FALHAS: ' || v_falha || E'\n';
+  if v_falha = 0 then
+    v_rel := v_rel || E' RESULTADO: TODAS AS REGRAS ESTAO ATIVAS NO BANCO.\n';
+  else
+    v_rel := v_rel || E' RESULTADO: EXISTEM REGRAS NAO ATIVAS - VER LINHAS [FALHA].\n';
+  end if;
+  v_rel := v_rel || E'===========================================================\n';
+  v_rel := v_rel || E' Nenhum dado de teste foi mantido: tudo sofreu rollback.\n';
+
+  raise notice '%', v_rel;
+
+  -- Rollback proposital de tudo o que este script criou.
+  raise exception 'RELATORIO_DE_TESTES__NADA_FOI_GRAVADO %', v_rel;
+end $$;
