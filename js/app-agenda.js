@@ -88,11 +88,71 @@ async function iniciarPagina() {
 
     carregandoGlobal(false);
     mostrarTela('tela-calendario');
+    convidarIdentificacao();
   } catch (erro) {
     carregandoGlobal(false);
     tratarErro(erro);
     mostrarTela('tela-config');
   }
+}
+
+/** Marca, na aba atual, que o convite ja foi mostrado. */
+const CHAVE_CONVITE = 'pta.convite';
+
+/**
+ * Convite de identificacao na chegada.
+ *
+ * DISPENSAVEL de proposito. A decisao 4 de docs/DECISOES.md mantem a consulta
+ * livre: o QR Code 2 fica em local de passagem e precisa responder "a PTA esta
+ * livre?" sem burocracia. O popup convida quem chega a se identificar - nao
+ * barra a leitura de quem so quer olhar o dia.
+ */
+function convidarIdentificacao() {
+  if (funcionarioLogado()) return;
+
+  // Uma vez por visita. sessionStorage some quando a aba fecha, entao o convite
+  // nao reaparece a cada ida e volta dentro da mesma navegacao.
+  if (sessionStorage.getItem(CHAVE_CONVITE)) return;
+  sessionStorage.setItem(CHAVE_CONVITE, '1');
+
+  const popup = criar('dialog', { classe: 'dialogo' });
+  const fechar = () => {
+    popup.close();
+    popup.remove();
+  };
+
+  preencher(popup, [
+    criar('h3', { texto: 'Identifique-se' }),
+    criar('p', {
+      texto: 'Para agendar uma PTA ou registrar uso, entre com sua matricula e PIN.',
+    }),
+    criar('p', {
+      classe: 'dica',
+      texto: 'Ainda nao tem cadastro? O primeiro acesso fica na mesma tela, '
+           + 'depois de escolher o setor.',
+    }),
+    criar('div', { classe: 'dialogo-acoes empilhado' }, [
+      criar('button', {
+        classe: 'btn btn-primario btn-largo',
+        type: 'button',
+        texto: 'ENTRAR OU CADASTRAR',
+        onClick: () => {
+          fechar();
+          exigirLogin(() => {}, 'Entre com seu cadastro ou use o primeiro acesso.');
+        },
+      }),
+      criar('button', {
+        classe: 'btn btn-texto',
+        type: 'button',
+        texto: 'So quero consultar',
+        onClick: fechar,
+      }),
+    ]),
+  ]);
+
+  popup.addEventListener('cancel', fechar);   // tecla Esc
+  document.body.append(popup);
+  popup.showModal();
 }
 
 function atualizarBarraUsuario() {
@@ -114,14 +174,14 @@ function atualizarBarraUsuario() {
  * Garante que existe um funcionario identificado antes de uma acao de escrita.
  * Se nao houver, abre o fluxo de login e retoma a acao depois.
  */
-function exigirLogin(acao) {
+function exigirLogin(acao, subtitulo = 'Identifique-se para registrar uma programacao.') {
   if (funcionarioLogado()) {
     acao();
     return;
   }
   estado.aposLogin = acao;
   const fluxo = criarFluxoLogin($('#login-container'), {
-    subtitulo: 'Identifique-se para registrar uma programacao.',
+    subtitulo,
     aoEntrar: () => {
       atualizarBarraUsuario();
       const pendente = estado.aposLogin;

@@ -676,6 +676,8 @@ pre {
 .dialogo h3 { margin: 0 0 .75rem; font-size: 1.125rem; }
 .dialogo p { margin: .375rem 0; }
 .dialogo-acoes { display: flex; gap: .625rem; margin-top: 1.5rem; }
+.dialogo-acoes.empilhado { flex-direction: column; gap: .25rem; }
+.dialogo-acoes.empilhado .btn-largo { margin-top: 0; }
 .dialogo-acoes .btn { flex: 1; }
 
 /* ------------------------------------------------------------- Impressao */
