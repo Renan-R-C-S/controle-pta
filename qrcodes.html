@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Controle de PTA — Gerador de QR Codes</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .folha { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+    .etiqueta-qr {
+      padding: 1rem; text-align: center; background: #fff; color: #14181d;
+      border: 2px solid #14181d; border-radius: 12px; break-inside: avoid;
+    }
+    .etiqueta-qr h3 { margin: 0 0 .25rem; font-size: 1.5rem; }
+    .etiqueta-qr .tipo { display: block; font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .75rem; }
+    .etiqueta-qr canvas, .etiqueta-qr img { width: 100%; max-width: 200px; height: auto; }
+    .etiqueta-qr .url { display: block; margin-top: .5rem; font-size: .625rem; word-break: break-all; color: #6b747d; }
+    .etiqueta-qr .instrucao { margin: .5rem 0 0; font-size: .75rem; font-weight: 600; }
+    @media print {
+      .nao-imprimir { display: none !important; }
+      .folha { grid-template-columns: repeat(2, 1fr); }
+      body { background: #fff; }
+      .conteudo { max-width: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="topo nao-imprimir">
+    <div class="topo-esquerda">
+      <span class="topo-rotulo">Ferramenta de implantacao</span>
+      <h1 class="topo-pta">Gerador de QR Codes</h1>
+    </div>
+  </header>
+
+  <main class="conteudo">
+
+    <section class="cartao-info nao-imprimir">
+      <h2>Como usar</h2>
+      <ol>
+        <li>Informe o endereco onde o sistema foi publicado.</li>
+        <li>Informe os codigos das PTAs existentes (um por linha).</li>
+        <li>Clique em <strong>GERAR</strong> e depois em <strong>IMPRIMIR</strong>.</li>
+        <li>Plastifique e fixe cada etiqueta <em>na propria PTA</em>; a etiqueta do calendario vai em local geral da fabrica.</li>
+      </ol>
+      <p class="dica">
+        Cada PTA precisa do <strong>seu proprio</strong> QR Code: e ele que identifica o equipamento
+        automaticamente, sem o funcionario precisar escolher nada na tela.
+      </p>
+    </section>
+
+    <form id="form-qr" class="nao-imprimir" style="margin-top:1.5rem">
+      <div class="campo-bloco">
+        <label class="rotulo" for="base">Endereco do sistema publicado</label>
+        <input id="base" class="campo" type="url" placeholder="https://seu-usuario.github.io/controle-pta" required>
+      </div>
+      <div class="campo-bloco">
+        <label class="rotulo" for="codigos">Codigos das PTAs (um por linha)</label>
+        <textarea id="codigos" class="campo" rows="5">PTA-001
+PTA-002
+PTA-003</textarea>
+      </div>
+      <div class="grupo-botoes-linha">
+        <button class="btn btn-primario" type="submit">GERAR</button>
+        <button id="btn-imprimir" class="btn btn-secundario" type="button">IMPRIMIR</button>
+      </div>
+    </form>
+
+    <div id="folha" class="folha"></div>
+  </main>
+
+  <script type="module">
+    /**
+     * Gera as etiquetas dos dois tipos de QR Code (itens 2, 3 e 41):
+     *   QR 1 -> index.html?modo=uso&pta=PTA-00X   (colado na propria PTA)
+     *   QR 2 -> agenda.html?modo=agenda           (local geral da fabrica)
+     *
+     * A biblioteca de QR e carregada de um CDN. Se a rede bloquear o CDN, a
+     * pagina continua util: mostra a URL para ser convertida em outro gerador.
+     */
+    const folha = document.getElementById('folha');
+    const campoBase = document.getElementById('base');
+
+    // Preenche o endereco com a propria origem, quando ja publicado.
+    campoBase.value = window.location.href.replace(/\/qrcodes\.html.*$/, '');
+
+    let QRCode = null;
+    try {
+      ({ default: QRCode } = await import('https://esm.sh/qrcode@1.5.3'));
+    } catch {
+      console.warn('[PTA] Biblioteca de QR indisponivel; mostrando apenas as URLs.');
+    }
+
+    async function desenhar(destino, texto) {
+      if (!QRCode) {
+        destino.append(Object.assign(document.createElement('p'), {
+          className: 'instrucao',
+          textContent: 'Gere o QR Code a partir da URL abaixo.',
+        }));
+        return;
+      }
+      const canvas = document.createElement('canvas');
+      destino.append(canvas);
+      await QRCode.toCanvas(canvas, texto, { width: 400, margin: 1, errorCorrectionLevel: 'M' });
+    }
+
+    async function etiqueta({ titulo, tipo, url, instrucao }) {
+      const bloco = document.createElement('div');
+      bloco.className = 'etiqueta-qr';
+      bloco.innerHTML = `<span class="tipo">${tipo}</span><h3>${titulo}</h3>`;
+      await desenhar(bloco, url);
+      bloco.insertAdjacentHTML('beforeend',
+        `<p class="instrucao">${instrucao}</p><span class="url">${url}</span>`);
+      folha.append(bloco);
+    }
+
+    document.getElementById('form-qr').addEventListener('submit', async (evento) => {
+      evento.preventDefault();
+      folha.replaceChildren();
+
+      const base = campoBase.value.replace(/\/+$/, '');
+      const codigos = document.getElementById('codigos').value
+        .split('\n').map((linha) => linha.trim()).filter(Boolean);
+
+      for (const codigo of codigos) {
+        await etiqueta({
+          titulo: codigo,
+          tipo: 'QR Code 1 — uso imediato',
+          url: `${base}/index.html?modo=uso&pta=${encodeURIComponent(codigo)}`,
+          instrucao: 'Fixar nesta PTA. Leia para iniciar ou finalizar o uso.',
+        });
+      }
+
+      await etiqueta({
+        titulo: 'CALENDARIO',
+        tipo: 'QR Code 2 — programacao',
+        url: `${base}/agenda.html?modo=agenda`,
+        instrucao: 'Fixar em local geral. Consulta e agendamento futuro.',
+      });
+    });
+
+    document.getElementById('btn-imprimir').addEventListener('click', () => window.print());
+  </script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+# =============================================================================
+# O que NAO vai para o repositorio
+#
+# Atencao ao que NAO esta nesta lista de proposito:
+#
+#   js/config.js  ->  VAI para o repositorio.
+#   A chave anon e publica por natureza: ela viaja no navegador de qualquer
+#   pessoa que abrir o sistema. Quem protege o banco e o RLS + as funcoes
+#   SECURITY DEFINER (sql/03_rls.sql), nao o sigilo dessa chave.
+#
+#   A chave service_role, essa sim, NUNCA pode entrar no repositorio nem no
+#   frontend - ela ignora todas as politicas de seguranca do banco.
+#   Se ela vazar, gere uma nova em Project Settings -> API.
+# =============================================================================
+
+# Segredos e conexoes
+.env
+.env.*
+*.pgpass
+supabase/.temp/
+
+# Sistema operacional
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editores
+.vscode/
+.idea/
+*.swp
+
+# Dependencias e temporarios
+node_modules/
+*.log
+_teste-*.html

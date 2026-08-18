@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f3057">
+  <meta name="description" content="Calendario geral de programacao e uso das PTAs.">
+  <title>Controle de PTA — Calendario geral</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
+</head>
+<body>
+
+  <header class="topo">
+    <div class="topo-esquerda">
+      <span class="topo-rotulo">Calendario geral · QR Code 2</span>
+      <h1 class="topo-pta">Programacao das PTAs</h1>
+      <span id="usuario-atual" class="topo-local"></span>
+    </div>
+    <div class="topo-direita">
+      <div class="topo-botoes">
+        <button id="btn-hoje" class="btn-icone" type="button" title="Ir para hoje" aria-label="Ir para hoje">⌂</button>
+        <button id="btn-sair" class="btn-icone" type="button" title="Sair" aria-label="Sair" hidden>⎋</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="conteudo">
+
+    <!-- =================================================================== -->
+    <section id="tela-config" class="tela ativa">
+      <div class="cartao-info">
+        <h2>Sistema ainda nao conectado</h2>
+        <p>Abra o arquivo <code>js/config.js</code> e preencha os dados do seu projeto Supabase.</p>
+        <p class="dica">Depois execute os arquivos da pasta <code>sql/</code> no SQL Editor, na ordem 01 a 04.</p>
+      </div>
+    </section>
+
+    <!-- ===================================================================
+         TELAS 1, 2 e 3 — identificacao (somente para criar/cancelar)
+         =================================================================== -->
+    <section id="tela-login" class="tela">
+      <div id="login-container"></div>
+      <button class="btn btn-texto" type="button" data-voltar-calendario>Voltar ao calendario</button>
+    </section>
+
+    <!-- ===================================================================
+         TELA 8 — calendario geral (itens 26 e 27)
+         =================================================================== -->
+    <section id="tela-calendario" class="tela">
+      <div id="calendario" class="calendario"></div>
+
+      <div class="barra-acoes">
+        <label class="rotulo-linha" for="filtro-pta">PTA</label>
+        <select id="filtro-pta" class="campo campo-inline"></select>
+        <button id="btn-novo" class="btn btn-primario" type="button">+ AGENDAR</button>
+      </div>
+
+      <h2 id="titulo-dia" class="titulo-dia"></h2>
+      <div id="lista-dia" class="lista-dia"></div>
+
+      <div class="grupo-botoes-linha">
+        <button id="btn-historico" class="btn btn-secundario" type="button">HISTORICO</button>
+        <button id="btn-auditoria" class="btn btn-secundario" type="button">AUDITORIA</button>
+      </div>
+
+      <p class="dica rodape-nota">
+        O uso registrado no QR Code da propria PTA tem prioridade sobre a programacao.
+        Programacoes afetadas continuam visiveis, marcadas no historico.
+      </p>
+    </section>
+
+    <!-- ===================================================================
+         TELA 9 — criar agendamento (itens 20 e 22)
+         =================================================================== -->
+    <section id="tela-novo" class="tela">
+      <h2 class="titulo-passo">Nova programacao</h2>
+      <div id="novo-corpo"></div>
+    </section>
+
+    <!-- ===================================================================
+         TELA 10 — historico consolidado
+         =================================================================== -->
+    <section id="tela-historico" class="tela">
+      <h2 class="titulo-passo">Historico de utilizacao</h2>
+      <div id="historico-corpo"></div>
+      <button class="btn btn-texto" type="button" data-voltar-calendario>Voltar ao calendario</button>
+    </section>
+
+    <!-- ===================================================================
+         TELA — auditoria (item 25)
+         =================================================================== -->
+    <section id="tela-auditoria" class="tela">
+      <h2 class="titulo-passo">Auditoria</h2>
+      <div id="auditoria-corpo"></div>
+      <button class="btn btn-texto" type="button" data-voltar-calendario>Voltar ao calendario</button>
+    </section>
+
+  </main>
+
+  <!-- Painel lateral de detalhes -->
+  <aside id="painel" class="painel" aria-live="polite">
+    <div class="painel-topo">
+      <h3 id="painel-titulo"></h3>
+      <button id="painel-fechar" class="btn-icone" type="button" aria-label="Fechar">×</button>
+    </div>
+    <div id="painel-corpo" class="painel-corpo"></div>
+  </aside>
+
+  <div id="aviso" class="aviso" role="status" aria-live="polite"></div>
+
+  <div id="carregando" class="capa-carregando">
+    <div class="girador" aria-hidden="true"></div>
+    <p id="carregando-texto">Carregando...</p>
+  </div>
+
+  <dialog id="dialogo" class="dialogo">
+    <h3 id="dialogo-titulo"></h3>
+    <div id="dialogo-corpo"></div>
+    <div class="dialogo-acoes">
+      <button id="dialogo-cancelar" class="btn btn-secundario" type="button">Cancelar</button>
+      <button id="dialogo-ok" class="btn btn-primario" type="button">Confirmar</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="js/app-agenda.js"></script>
+</body>
+</html>

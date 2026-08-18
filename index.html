@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f3057">
+  <meta name="description" content="Controle de uso de Plataformas de Trabalho em Altura (PTA).">
+  <title>Controle de PTA — Uso imediato</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
+</head>
+<body>
+
+  <!-- =====================================================================
+       CABECALHO — sempre mostra qual PTA foi identificada pelo QR Code 1
+       ===================================================================== -->
+  <header class="topo">
+    <div class="topo-esquerda">
+      <span class="topo-rotulo">Uso imediato · QR Code 1</span>
+      <h1 id="pta-codigo" class="topo-pta">PTA</h1>
+      <span id="pta-local" class="topo-local"></span>
+    </div>
+    <div class="topo-direita">
+      <span id="relogio" class="topo-relogio"></span>
+      <div class="topo-botoes">
+        <button id="btn-atualizar" class="btn-icone" type="button" title="Atualizar" aria-label="Atualizar">↻</button>
+        <button id="btn-sair" class="btn-icone" type="button" title="Sair" aria-label="Sair">⎋</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="conteudo">
+
+    <!-- ===================================================================
+         TELA: configuracao pendente
+         =================================================================== -->
+    <section id="tela-config" class="tela ativa">
+      <div class="cartao-info">
+        <h2>Sistema ainda nao conectado</h2>
+        <p>Abra o arquivo <code>js/config.js</code> e preencha os dados do seu projeto Supabase:</p>
+        <pre><code>export const SUPABASE_URL = 'https://xxxxx.supabase.co';
+export const SUPABASE_ANON_KEY = 'eyJhbGciOi...';</code></pre>
+        <p class="dica">Use somente a chave <strong>anon</strong>. A chave <code>service_role</code> nunca pode ficar no frontend.</p>
+        <p class="dica">Depois, execute os arquivos da pasta <code>sql/</code> no SQL Editor do Supabase, na ordem 01 a 04.</p>
+      </div>
+    </section>
+
+    <!-- ===================================================================
+         TELA: QR Code sem o parametro ?pta=
+         =================================================================== -->
+    <section id="tela-escolher-pta" class="tela">
+      <div class="cartao-info">
+        <h2>Qual PTA voce esta usando?</h2>
+        <p class="dica">
+          Esta pagina foi aberta sem o codigo da PTA. Normalmente o QR Code fixado
+          no equipamento ja traz essa informacao.
+        </p>
+      </div>
+      <div id="escolher-pta-lista"></div>
+      <a class="btn btn-texto" href="agenda.html?modo=agenda">Abrir o calendario geral</a>
+    </section>
+
+    <!-- ===================================================================
+         TELAS 1, 2 e 3 — setor, funcionario e PIN (montadas por js/login-ui.js)
+         =================================================================== -->
+    <section id="tela-login" class="tela">
+      <div id="login-container"></div>
+    </section>
+
+    <!-- ===================================================================
+         TELA 4 — dashboard da PTA (itens 10 e 38)
+         =================================================================== -->
+    <section id="tela-dashboard" class="tela">
+      <div id="dashboard-corpo"></div>
+      <a class="btn btn-texto" href="agenda.html?modo=agenda">Ver calendario geral</a>
+    </section>
+
+    <!-- ===================================================================
+         TELA 5 — inicio de uso (itens 11 e 12)
+         =================================================================== -->
+    <section id="tela-iniciar" class="tela">
+      <h2 class="titulo-passo">Definir uso da PTA</h2>
+      <div id="iniciar-corpo"></div>
+    </section>
+
+    <!-- ===================================================================
+         TELA 7 — observacao (itens 18 e 19)
+         =================================================================== -->
+    <section id="tela-observacao" class="tela">
+      <h2 class="titulo-passo">Observacao do uso</h2>
+      <div id="observacao-corpo"></div>
+    </section>
+
+    <!-- ===================================================================
+         TELA — minha programacao
+         =================================================================== -->
+    <section id="tela-programacao" class="tela">
+      <h2 class="titulo-passo">Minha programacao</h2>
+      <div id="programacao-corpo"></div>
+    </section>
+
+  </main>
+
+  <!-- Aviso temporario -->
+  <div id="aviso" class="aviso" role="status" aria-live="polite"></div>
+
+  <!-- Bloqueio de carregamento -->
+  <div id="carregando" class="capa-carregando">
+    <div class="girador" aria-hidden="true"></div>
+    <p id="carregando-texto">Carregando...</p>
+  </div>
+
+  <!-- Dialogo de confirmacao -->
+  <dialog id="dialogo" class="dialogo">
+    <h3 id="dialogo-titulo"></h3>
+    <div id="dialogo-corpo"></div>
+    <div class="dialogo-acoes">
+      <button id="dialogo-cancelar" class="btn btn-secundario" type="button">Cancelar</button>
+      <button id="dialogo-ok" class="btn btn-primario" type="button">Confirmar</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="js/app-uso.js"></script>
+</body>
+</html>
