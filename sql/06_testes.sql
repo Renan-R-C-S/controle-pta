@@ -59,6 +59,12 @@ declare
   v_txt      text;
   v_bool     boolean;
   v_int      int;
+  v_txt2     text;
+  -- administracao
+  v_um       uuid; v_tm    uuid;   -- ADMIN_MASTER
+  v_uadm     uuid; v_tadm  uuid;   -- ADMIN comum
+  v_ualvo    uuid; v_talvo uuid;   -- funcionario que sera desativado
+  v_ag_alvo  uuid;
 begin
   v_local   := now() at time zone public.fn_tz();
   v_ultima  := v_local::date + time '23:59';
@@ -444,6 +450,251 @@ begin
     from public.fn_agenda_dia((now() at time zone public.fn_tz())::date, null);
   if v_int = 2 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' tipos' || E'\n'; end if;
+
+  v_rel := v_rel || E'\n-- ADMINISTRACAO E PERFIL ---------------------------\n';
+
+  -- ===========================================================================
+  -- PERFIS DE ACESSO
+  -- ===========================================================================
+
+  -- Matriculas reservadas de teste (desfeitas junto com o resto)
+  insert into public.matriculas_reservadas (matricula, papel)
+  values ('900591', 'ADMIN_MASTER'), ('900592', 'ADMIN');
+
+  v_r := public.fn_cadastrar_funcionario('Teste Master', '900591', '5591', v_setor);
+  v_tm := (v_r->>'token')::uuid; v_um := (v_r->'funcionario'->>'id')::uuid;
+  v_r := public.fn_cadastrar_funcionario('Teste Admin', '900592', '5592', v_setor);
+  v_tadm := (v_r->>'token')::uuid; v_uadm := (v_r->'funcionario'->>'id')::uuid;
+  v_r := public.fn_cadastrar_funcionario('Teste Alvo', '900004', '4444', v_setor);
+  v_talvo := (v_r->>'token')::uuid; v_ualvo := (v_r->'funcionario'->>'id')::uuid;
+
+  -- T41 matricula reservada nasce com papel administrativo
+  v_desc := 'T41 matricula reservada nasce com papel administrativo';
+  select papel into v_txt  from public.funcionarios where id = v_um;
+  select papel into v_txt2 from public.funcionarios where id = v_uadm;
+  if v_txt = 'ADMIN_MASTER' and v_txt2 = 'ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_txt,'?') || '/' || coalesce(v_txt2,'?') || E'\n'; end if;
+
+  -- T42 funcionario comum nao entra na administracao
+  v_desc := 'T42 funcionario comum nao acessa a administracao'; v_erro := null;
+  begin perform * from public.fn_admin_listar_funcionarios(v_ta);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'entrou!') || E'\n'; end if;
+
+  -- T43 ADMIN promove alguem a ADMIN
+  v_desc := 'T43 ADMIN promove funcionario a ADMIN'; v_erro := null;
+  begin perform public.fn_admin_definir_papel(v_tadm, v_ub, 'ADMIN');
+  exception when others then v_erro := sqlerrm; end;
+  select papel into v_txt from public.funcionarios where id = v_ub;
+  if v_erro is null and v_txt = 'ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+
+  -- T44 ADMIN comum NAO revoga (privilegio exclusivo do master)
+  v_desc := 'T44 ADMIN comum nao consegue revogar papel de ADMIN'; v_erro := null;
+  begin perform public.fn_admin_definir_papel(v_tadm, v_ub, 'FUNCIONARIO');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SOMENTE_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'revogou!') || E'\n'; end if;
+
+  -- T45 ADMIN_MASTER revoga
+  v_desc := 'T45 ADMIN_MASTER revoga papel de ADMIN'; v_erro := null;
+  begin perform public.fn_admin_definir_papel(v_tm, v_ub, 'FUNCIONARIO');
+  exception when others then v_erro := sqlerrm; end;
+  select papel into v_txt from public.funcionarios where id = v_ub;
+  if v_erro is null and v_txt = 'FUNCIONARIO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+
+  -- T46 o ADMIN_MASTER e intocavel
+  v_desc := 'T46 papel do ADMIN_MASTER nao pode ser alterado'; v_erro := null;
+  begin perform public.fn_admin_definir_papel(v_tadm, v_um, 'FUNCIONARIO');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'ADMIN_MASTER_PROTEGIDO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'alterou!') || E'\n'; end if;
+
+  -- T47 ninguem altera o proprio papel
+  v_desc := 'T47 ninguem altera o proprio papel'; v_erro := null;
+  begin perform public.fn_admin_definir_papel(v_tadm, v_uadm, 'FUNCIONARIO');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PAPEL_PROPRIO_BLOQUEADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'alterou!') || E'\n'; end if;
+
+  -- ===========================================================================
+  -- ADMINISTRACAO SOBRE PROGRAMACOES
+  -- ===========================================================================
+
+  -- Programacao do "alvo" para amanha bem cedo, usada nos testes seguintes
+  v_r := public.fn_agendamento_criar(v_talvo, v_p901, v_amanha, '06:00', '07:00');
+  v_ag_alvo := (v_r->>'id')::uuid;
+
+  -- T48 ADMIN altera programacao de outra pessoa
+  v_desc := 'T48 ADMIN altera programacao de outro funcionario'; v_erro := null;
+  begin perform public.fn_agendamento_alterar(v_tadm, v_ag_alvo, v_amanha, '06:30', '07:30');
+  exception when others then v_erro := sqlerrm; end;
+  select to_char(inicio_planejado at time zone public.fn_tz(), 'HH24:MI') into v_txt
+    from public.agendamentos where id = v_ag_alvo;
+  if v_erro is null and v_txt = '06:30' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+
+  -- T49 funcionario comum NAO altera programacao alheia
+  v_desc := 'T49 funcionario comum nao altera programacao alheia'; v_erro := null;
+  begin perform public.fn_agendamento_alterar(v_ta, v_ag_alvo, v_amanha, '05:00', '05:30');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'alterou!') || E'\n'; end if;
+
+  -- T50 a alteracao continua respeitando conflito (T27 ocupou 08:00-10:00)
+  v_desc := 'T50 alteracao para horario ocupado e bloqueada'; v_erro := null;
+  begin perform public.fn_agendamento_alterar(v_tadm, v_ag_alvo, v_amanha, '08:30', '09:30');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'CONFLITO_AGENDAMENTO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T51 ADMIN cancela programacao de outro
+  v_desc := 'T51 ADMIN cancela programacao de outro funcionario'; v_erro := null;
+  begin perform public.fn_agendamento_cancelar(v_tadm, v_ag_alvo);
+  exception when others then v_erro := sqlerrm; end;
+  select status into v_txt from public.agendamentos where id = v_ag_alvo;
+  if v_erro is null and v_txt = 'CANCELADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+
+  -- T52 a programacao cancelada continua existindo (REGRA 18)
+  v_desc := 'T52 programacao "excluida" pelo admin continua no historico';
+  select count(*) into v_int from public.agendamentos where id = v_ag_alvo;
+  if v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> sumiu do banco' || E'\n'; end if;
+
+  -- ===========================================================================
+  -- EXCLUSAO DE FUNCIONARIOS
+  -- ===========================================================================
+
+  -- T53 desativar o ADMIN_MASTER e bloqueado
+  v_desc := 'T53 ADMIN_MASTER nao pode ser desativado'; v_erro := null;
+  begin perform public.fn_admin_desativar_funcionario(v_tadm, v_um);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'ADMIN_MASTER_PROTEGIDO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'desativou!') || E'\n'; end if;
+
+  -- T54 desativar a si mesmo e bloqueado
+  v_desc := 'T54 ninguem desativa a si mesmo'; v_erro := null;
+  begin perform public.fn_admin_desativar_funcionario(v_tadm, v_uadm);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'EXCLUSAO_PROPRIA_BLOQUEADA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'desativou!') || E'\n'; end if;
+
+  -- Programacao futura do alvo, para conferir o cancelamento em cascata
+  perform public.fn_agendamento_criar(v_talvo, v_p902, v_amanha, '06:00', '07:00');
+
+  -- T55 desativar funcionario cancela as programacoes futuras dele
+  v_desc := 'T55 desativar funcionario cancela suas programacoes futuras'; v_erro := null;
+  begin v_r := public.fn_admin_desativar_funcionario(v_tadm, v_ualvo);
+  exception when others then v_erro := sqlerrm; end;
+  select ativo into v_bool from public.funcionarios where id = v_ualvo;
+  if v_erro is null and v_bool is false and (v_r->>'agendamentos_cancelados')::int = 1 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T56 o historico do desativado permanece
+  v_desc := 'T56 historico do funcionario desativado e preservado';
+  select count(*) into v_int from public.auditoria where usuario_id = v_ualvo;
+  if v_int > 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> auditoria vazia' || E'\n'; end if;
+
+  -- T57 desativado some da lista de login
+  v_desc := 'T57 funcionario desativado some da lista de login';
+  select count(*) into v_int from public.fn_funcionarios_por_setor(v_setor) f where f.id = v_ualvo;
+  if v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || E'\n'; end if;
+
+  -- T58 desativado nao consegue mais entrar
+  v_desc := 'T58 funcionario desativado nao consegue fazer login'; v_erro := null;
+  begin v_r := public.fn_login(v_ualvo, '4444');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'FUNCIONARIO_NAO_ENCONTRADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+
+  -- T59 reativar devolve o acesso
+  v_desc := 'T59 administrador consegue reativar um funcionario'; v_erro := null;
+  begin perform public.fn_admin_reativar_funcionario(v_tadm, v_ualvo);
+  exception when others then v_erro := sqlerrm; end;
+  select ativo into v_bool from public.funcionarios where id = v_ualvo;
+  if v_erro is null and v_bool then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'continua inativo') || E'\n'; end if;
+
+  -- ===========================================================================
+  -- LIMITE DE MATRICULAS
+  -- ===========================================================================
+
+  -- T60 ADMIN comum nao mexe no limite
+  v_desc := 'T60 somente o ADMIN_MASTER altera o limite de matriculas'; v_erro := null;
+  begin perform public.fn_admin_definir_limite_matriculas(v_tadm, 50);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SOMENTE_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'alterou!') || E'\n'; end if;
+
+  -- T61 limite abaixo do numero de ativos e recusado
+  v_desc := 'T61 limite abaixo do total de ativos e recusado'; v_erro := null;
+  begin perform public.fn_admin_definir_limite_matriculas(v_tm, 1);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'LIMITE_ABAIXO_DO_ATUAL' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T62 limite cheio impede novo cadastro
+  v_desc := 'T62 limite de matriculas impede novo cadastro'; v_erro := null;
+  select count(*) into v_int from public.funcionarios where ativo;
+  perform public.fn_admin_definir_limite_matriculas(v_tm, v_int);
+  begin perform public.fn_cadastrar_funcionario('Teste Excedente', '900099', '9099', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'LIMITE_MATRICULAS_ATINGIDO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'cadastrou!') || E'\n'; end if;
+
+  -- T63 limite 0 volta a liberar
+  v_desc := 'T63 limite 0 significa sem limite'; v_erro := null;
+  perform public.fn_admin_definir_limite_matriculas(v_tm, 0);
+  begin perform public.fn_cadastrar_funcionario('Teste Liberado', '900098', '9098', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_erro || E'\n'; end if;
+
+  -- ===========================================================================
+  -- PERFIL DO PROPRIO FUNCIONARIO
+  -- ===========================================================================
+
+  -- T64 funcionario altera o proprio nome
+  v_desc := 'T64 funcionario altera o proprio nome'; v_erro := null;
+  begin perform public.fn_perfil_alterar_nome(v_ta, 'Teste Alfa Renomeado');
+  exception when others then v_erro := sqlerrm; end;
+  select nome into v_txt from public.funcionarios where id = v_ua;
+  if v_erro is null and v_txt = 'Teste Alfa Renomeado' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+
+  -- T65 a matricula NAO muda junto
+  v_desc := 'T65 alterar o nome nao altera a matricula';
+  select matricula into v_txt from public.funcionarios where id = v_ua;
+  if v_txt = '900001' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_txt,'?') || E'\n'; end if;
+
+  -- T66 a troca de nome fica registrada com o valor anterior
+  v_desc := 'T66 troca de nome gera auditoria com valor anterior';
+  select count(*) into v_int from public.auditoria
+   where tipo_acao = 'NOME_ALTERADO' and registro_id = v_ua::text
+     and dados_anteriores->>'nome' = 'Teste Alfa';
+  if v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' registros' || E'\n'; end if;
+
+  -- T67 nome invalido e recusado
+  v_desc := 'T67 nome muito curto e recusado'; v_erro := null;
+  begin perform public.fn_perfil_alterar_nome(v_ta, 'Jo');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'NOME_INVALIDO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
+
+  -- T68 nem o administrador apaga auditoria
+  v_desc := 'T68 administrador tambem nao apaga auditoria'; v_erro := null;
+  begin delete from public.auditoria where tipo_acao = 'PAPEL_ALTERADO';
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'HISTORICO_IMUTAVEL' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'apagou!') || E'\n'; end if;
 
   -- ===========================================================================
   -- RELATORIO

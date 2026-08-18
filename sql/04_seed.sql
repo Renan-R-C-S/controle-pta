@@ -24,6 +24,29 @@ insert into public.setores (nome, ordem) values
   ('Mecanica', 1), ('Eletrica', 2), ('PCM', 3), ('Producao', 4)
 on conflict (nome) do nothing;
 
+-- =============================================================================
+-- MATRICULAS ADMINISTRATIVAS
+--
+-- Estas matriculas ja nascem com papel administrativo no momento do cadastro.
+-- E o unico jeito de existir o primeiro ADMIN: dai em diante, o proprio
+-- ADMIN_MASTER promove quem mais precisar, pela tela de administracao.
+--
+-- ATENCAO OPERACIONAL: quem cadastrar PRIMEIRO uma destas matriculas assume o
+-- papel. Peca a essas tres pessoas que facam o primeiro acesso no dia da
+-- implantacao, antes de liberar o QR Code para o resto da fabrica.
+-- =============================================================================
+insert into public.matriculas_reservadas (matricula, papel, observacao) values
+  ('0591', 'ADMIN_MASTER', 'Administrador original: concede e revoga papeis, define o limite de matriculas'),
+  ('0592', 'ADMIN',        'Administrador'),
+  ('0593', 'ADMIN',        'Administrador')
+on conflict (matricula) do nothing;
+
+-- Se alguma dessas matriculas ja tiver sido cadastrada ANTES desta atualizacao,
+-- promova-a uma unica vez, manualmente:
+--   update public.funcionarios set papel = 'ADMIN_MASTER' where matricula = '0591';
+-- Este script nao faz isso sozinho de proposito: reaplicar o seed devolveria o
+-- papel a alguem de quem o ADMIN_MASTER tivesse acabado de revogar.
+
 -- PTAs (item 39) --------------------------------------------------------------
 insert into public.ptas (codigo, descricao, local) values
   ('PTA-001', 'Plataforma tesoura 10m',   'Galpao A - Linha 1'),

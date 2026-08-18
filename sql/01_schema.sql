@@ -252,3 +252,69 @@ create trigger trg_auditoria_imutavel before update or delete on public.auditori
 drop trigger if exists trg_afetados_imutavel on public.agendamentos_afetados;
 create trigger trg_afetados_imutavel before update or delete on public.agendamentos_afetados
   for each row execute function public.fn_bloquear_alteracao_historico();
+
+-- =============================================================================
+-- PERFIS DE ACESSO E ADMINISTRACAO
+--
+-- Tres papeis:
+--   FUNCIONARIO   uso normal do sistema
+--   ADMIN         + alterar/cancelar qualquer programacao, desativar usuarios,
+--                   promover outros a ADMIN
+--   ADMIN_MASTER  + revogar ADMIN de alguem e definir o limite de matriculas
+--
+-- Nenhum papel altera auditoria ou historico: os gatilhos de imutabilidade
+-- valem para todo mundo, inclusive para o dono do banco.
+-- =============================================================================
+
+alter table public.funcionarios
+  add column if not exists papel          text not null default 'FUNCIONARIO',
+  add column if not exists desativado_em  timestamptz,
+  add column if not exists desativado_por uuid references public.funcionarios(id);
+
+alter table public.funcionarios drop constraint if exists funcionarios_papel_valido;
+alter table public.funcionarios add constraint funcionarios_papel_valido
+  check (papel in ('FUNCIONARIO', 'ADMIN', 'ADMIN_MASTER'));
+
+create index if not exists idx_funcionarios_papel
+  on public.funcionarios (papel) where papel <> 'FUNCIONARIO';
+
+-- Matriculas que ja nascem com papel administrativo quando forem cadastradas.
+-- E o mecanismo de partida do sistema: sem ele nao existiria o primeiro ADMIN.
+-- ATENCAO: quem cadastrar primeiro uma destas matriculas assume o papel. Essas
+-- pessoas devem se cadastrar no primeiro dia (ver README, secao 10).
+create table if not exists public.matriculas_reservadas (
+  matricula   text primary key,
+  papel       text not null,
+  observacao  text,
+  criado_em   timestamptz not null default now(),
+  constraint matriculas_reservadas_papel   check (papel in ('ADMIN', 'ADMIN_MASTER')),
+  constraint matriculas_reservadas_formato check (matricula ~ '^[0-9]{4,10}$')
+);
+
+-- Parametros gerais ajustaveis pelo ADMIN_MASTER.
+create table if not exists public.configuracao (
+  chave           text primary key,
+  valor           text not null,
+  descricao       text,
+  atualizado_em   timestamptz not null default now(),
+  atualizado_por  uuid references public.funcionarios(id) on delete set null
+);
+
+-- limite_matriculas: quantidade maxima de funcionarios ATIVOS.
+-- O valor 0 significa "sem limite". Desativar alguem libera vaga.
+insert into public.configuracao (chave, valor, descricao)
+values ('limite_matriculas', '0',
+        'Maximo de funcionarios ativos. 0 = sem limite. Somente o ADMIN_MASTER altera.')
+on conflict (chave) do nothing;
+
+-- Novos tipos de acao auditavel (REGRA 15)
+alter table public.auditoria drop constraint if exists auditoria_tipo_acao_valido;
+alter table public.auditoria add constraint auditoria_tipo_acao_valido check (tipo_acao in (
+    'CADASTRO_USUARIO', 'LOGIN', 'LOGIN_FALHA', 'LOGOUT',
+    'AGENDAMENTO_CRIADO', 'AGENDAMENTO_CANCELADO', 'AGENDAMENTO_SOBRESCRITO',
+    'AGENDAMENTO_CONCLUIDO', 'AGENDAMENTO_ALTERADO',
+    'USO_INICIADO', 'USO_FINALIZADO',
+    'OBSERVACAO_CRIADA', 'OBSERVACAO_EDITADA',
+    'NOME_ALTERADO', 'PAPEL_ALTERADO',
+    'FUNCIONARIO_DESATIVADO', 'FUNCIONARIO_REATIVADO',
+    'LIMITE_MATRICULAS_ALTERADO'));

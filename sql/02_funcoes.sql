@@ -110,6 +110,8 @@ begin
 end $$;
 
 -- Monta o objeto publico do funcionario (jamais inclui pin_hash).
+-- Os campos "admin" e "master" existem apenas para a interface decidir o que
+-- desenhar. Eles NAO autorizam nada: toda permissao e reconferida no banco.
 create or replace function public.fn__func_publico(p_func public.funcionarios)
 returns jsonb
 language sql stable security definer set search_path = public, extensions as $$
@@ -118,9 +120,32 @@ language sql stable security definer set search_path = public, extensions as $$
     'nome',       p_func.nome,
     'matricula',  p_func.matricula,
     'setor_id',   p_func.setor_id,
-    'setor',      (select nome from public.setores where id = p_func.setor_id)
+    'setor',      (select nome from public.setores where id = p_func.setor_id),
+    'papel',      p_func.papel,
+    'admin',      (p_func.papel in ('ADMIN', 'ADMIN_MASTER')),
+    'master',     (p_func.papel = 'ADMIN_MASTER')
   );
 $$;
+
+-- Exige papel administrativo. Usada no inicio de toda funcao de administracao.
+create or replace function public.fn__exigir_admin(p_func public.funcionarios)
+returns void
+language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if p_func.papel not in ('ADMIN', 'ADMIN_MASTER') then
+    raise exception 'SEM_PERMISSAO_ADMIN' using errcode = 'P0001';
+  end if;
+end $$;
+
+-- Exige o papel de administrador original (0591 na implantacao).
+create or replace function public.fn__exigir_master(p_func public.funcionarios)
+returns void
+language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if p_func.papel <> 'ADMIN_MASTER' then
+    raise exception 'SOMENTE_ADMIN_MASTER' using errcode = 'P0001';
+  end if;
+end $$;
 
 -- =============================================================================
 -- 1) SETORES E FUNCIONARIOS (identificacao - itens 6, 8)
@@ -170,6 +195,9 @@ declare
   v_token  uuid;
   v_nome   text := btrim(coalesce(p_nome, ''));
   v_matr   text := btrim(coalesce(p_matricula, ''));
+  v_limite int;
+  v_ativos int;
+  v_papel  text;
 begin
   if char_length(v_nome) < 3 or char_length(v_nome) > 80 then
     raise exception 'NOME_INVALIDO' using errcode = 'P0001';
@@ -188,9 +216,28 @@ begin
     raise exception 'SETOR_INVALIDO' using errcode = 'P0001';
   end if;
 
+  -- Serializa os cadastros para que o limite valha mesmo com duas pessoas
+  -- se cadastrando no mesmo segundo. O bloqueio cai junto com a transacao.
+  perform pg_advisory_xact_lock(hashtext('pta.cadastro_funcionario'));
+
+  select coalesce(nullif(valor, '')::int, 0) into v_limite
+    from public.configuracao where chave = 'limite_matriculas';
+
+  if coalesce(v_limite, 0) > 0 then
+    select count(*) into v_ativos from public.funcionarios where ativo;
+    if v_ativos >= v_limite then
+      raise exception 'LIMITE_MATRICULAS_ATINGIDO' using errcode = 'P0001';
+    end if;
+  end if;
+
+  -- Matriculas reservadas ja nascem com papel administrativo (bootstrap).
+  select papel into v_papel
+    from public.matriculas_reservadas where matricula = v_matr;
+
   begin
-    insert into public.funcionarios (nome, matricula, pin_hash, setor_id)
-    values (v_nome, v_matr, crypt(p_pin, gen_salt('bf', 10)), p_setor_id)
+    insert into public.funcionarios (nome, matricula, pin_hash, setor_id, papel)
+    values (v_nome, v_matr, crypt(p_pin, gen_salt('bf', 10)), p_setor_id,
+            coalesce(v_papel, 'FUNCIONARIO'))
     returning * into v_func;
   exception
     when unique_violation then
@@ -202,8 +249,11 @@ begin
     v_func.id, null, 'CADASTRO_USUARIO', 'FUNCIONARIO', v_func.id::text,
     null,
     jsonb_build_object('nome', v_func.nome, 'matricula', v_func.matricula,
-                       'setor_id', v_func.setor_id),
-    'Cadastro de funcionario no primeiro acesso');
+                       'setor_id', v_func.setor_id, 'papel', v_func.papel),
+    case when v_func.papel = 'FUNCIONARIO'
+         then 'Cadastro de funcionario no primeiro acesso'
+         else 'Cadastro de funcionario com papel ' || v_func.papel ||
+              ' (matricula reservada)' end);
 
   v_token := public.fn__abrir_sessao(v_func.id);
 
@@ -824,8 +874,9 @@ create or replace function public.fn_agendamento_cancelar(p_token uuid, p_agenda
 returns jsonb
 language plpgsql security definer set search_path = public, extensions as $$
 declare
-  v_func public.funcionarios;
-  v_ag   public.agendamentos;
+  v_func      public.funcionarios;
+  v_ag        public.agendamentos;
+  v_por_admin boolean;
 begin
   v_func := public.fn__sessao(p_token);
 
@@ -833,24 +884,33 @@ begin
   if v_ag.id is null then
     raise exception 'AGENDAMENTO_NAO_ENCONTRADO' using errcode = 'P0001';
   end if;
-  -- Somente o autor cancela a propria programacao (item 31).
-  if v_ag.funcionario_id <> v_func.id then
-    raise exception 'SEM_PERMISSAO' using errcode = 'P0001';
+
+  -- O autor cancela a propria programacao; ADMIN cancela a de qualquer um.
+  v_por_admin := (v_ag.funcionario_id <> v_func.id);
+  if v_por_admin then
+    perform public.fn__exigir_admin(v_func);
   end if;
+
   if v_ag.status <> 'AGENDADO' then
     raise exception 'AGENDAMENTO_NAO_CANCELAVEL' using errcode = 'P0001';
   end if;
 
+  -- "Excluir" e sempre marcar como CANCELADO: apagar fisicamente destruiria o
+  -- rastro da programacao e a ligacao com eventuais sobrescritas (REGRA 18).
   update public.agendamentos
      set status = 'CANCELADO', cancelado_em = now(),
-         motivo_status = 'Cancelado pelo autor'
+         motivo_status = case when v_por_admin
+              then 'Cancelado pela administracao (' || v_func.nome || ')'
+              else 'Cancelado pelo autor' end
    where id = v_ag.id;
 
   perform public.fn__auditar(
     v_func.id, v_ag.pta_id, 'AGENDAMENTO_CANCELADO', 'AGENDAMENTO', v_ag.id::text,
     jsonb_build_object('status', 'AGENDADO'),
-    jsonb_build_object('status', 'CANCELADO'),
-    'Agendamento cancelado pelo autor');
+    jsonb_build_object('status', 'CANCELADO', 'por_admin', v_por_admin),
+    case when v_por_admin
+         then 'Agendamento cancelado pela administracao'
+         else 'Agendamento cancelado pelo autor' end);
 
   return jsonb_build_object('ok', true);
 end $$;
@@ -1123,6 +1183,417 @@ language sql stable security definer set search_path = public, extensions as $$
 $$;
 
 -- =============================================================================
+-- 8) PERFIL DO PROPRIO FUNCIONARIO
+-- =============================================================================
+
+-- O funcionario corrige o proprio nome. A MATRICULA nunca muda por aqui: ela e
+-- a identidade do registro, referenciada por usos, agendamentos e auditoria.
+-- Trocar matricula seria reescrever historico (REGRA 16).
+create or replace function public.fn_perfil_alterar_nome(p_token uuid, p_nome text)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func  public.funcionarios;
+  v_nome  text := btrim(coalesce(p_nome, ''));
+  v_antes text;
+begin
+  v_func := public.fn__sessao(p_token);
+
+  if char_length(v_nome) < 3 or char_length(v_nome) > 80 then
+    raise exception 'NOME_INVALIDO' using errcode = 'P0001';
+  end if;
+
+  if v_nome = v_func.nome then
+    return jsonb_build_object('ok', true, 'funcionario', public.fn__func_publico(v_func));
+  end if;
+
+  v_antes := v_func.nome;
+
+  update public.funcionarios set nome = v_nome where id = v_func.id
+  returning * into v_func;
+
+  perform public.fn__auditar(
+    v_func.id, null, 'NOME_ALTERADO', 'FUNCIONARIO', v_func.id::text,
+    jsonb_build_object('nome', v_antes),
+    jsonb_build_object('nome', v_nome),
+    'Funcionario alterou o proprio nome');
+
+  return jsonb_build_object('ok', true, 'funcionario', public.fn__func_publico(v_func));
+end $$;
+
+-- =============================================================================
+-- 9) ALTERACAO DE PROGRAMACAO
+-- =============================================================================
+
+-- O autor ajusta a propria programacao; o ADMIN ajusta a de qualquer um.
+-- As mesmas regras de conflito e de horario futuro continuam valendo.
+create or replace function public.fn_agendamento_alterar(
+  p_token         uuid,
+  p_agendamento_id uuid,
+  p_data          date,
+  p_hora_inicio   time,
+  p_hora_fim      time
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func      public.funcionarios;
+  v_ag        public.agendamentos;
+  v_inicio    timestamptz;
+  v_fim       timestamptz;
+  v_por_admin boolean;
+begin
+  v_func := public.fn__sessao(p_token);
+
+  select * into v_ag from public.agendamentos where id = p_agendamento_id;
+  if v_ag.id is null then
+    raise exception 'AGENDAMENTO_NAO_ENCONTRADO' using errcode = 'P0001';
+  end if;
+
+  v_por_admin := (v_ag.funcionario_id <> v_func.id);
+  if v_por_admin then
+    perform public.fn__exigir_admin(v_func);
+  end if;
+
+  -- So faz sentido mexer no que ainda esta valendo. Uma programacao ja
+  -- sobrescrita, concluida ou cancelada e historico.
+  if v_ag.status <> 'AGENDADO' then
+    raise exception 'AGENDAMENTO_NAO_ALTERAVEL' using errcode = 'P0001';
+  end if;
+
+  if p_data is null or p_hora_inicio is null or p_hora_fim is null then
+    raise exception 'HORARIO_INVALIDO' using errcode = 'P0001';
+  end if;
+
+  v_inicio := public.fn__local_para_utc(p_data, p_hora_inicio);
+  v_fim    := public.fn__local_para_utc(p_data, p_hora_fim);
+
+  if v_fim <= v_inicio then
+    raise exception 'HORARIO_FINAL_ANTERIOR' using errcode = 'P0001';
+  end if;
+  if v_inicio <= now() then
+    raise exception 'AGENDAMENTO_PASSADO' using errcode = 'P0001';
+  end if;
+  if v_fim - v_inicio > interval '14 hours' then
+    raise exception 'DURACAO_EXCESSIVA' using errcode = 'P0001';
+  end if;
+
+  if exists (
+    select 1 from public.usos u
+     where u.pta_id = v_ag.pta_id and u.status = 'EM_USO'
+       and tstzrange(u.inicio_efetivo, u.fim_pretendido, '[)') && tstzrange(v_inicio, v_fim, '[)')
+  ) then
+    raise exception 'CONFLITO_COM_USO' using errcode = 'P0001';
+  end if;
+
+  begin
+    update public.agendamentos
+       set data_ref = p_data,
+           inicio_planejado = v_inicio,
+           fim_planejado = v_fim,
+           motivo_status = case when v_por_admin
+                then 'Alterado pela administracao (' || v_func.nome || ')'
+                else 'Alterado pelo autor' end
+     where id = v_ag.id;
+  exception
+    when exclusion_violation then
+      raise exception 'CONFLITO_AGENDAMENTO' using errcode = 'P0001';
+  end;
+
+  perform public.fn__auditar(
+    v_func.id, v_ag.pta_id, 'AGENDAMENTO_ALTERADO', 'AGENDAMENTO', v_ag.id::text,
+    jsonb_build_object(
+      'data', v_ag.data_ref,
+      'inicio_planejado', to_char(v_ag.inicio_planejado at time zone public.fn_tz(), 'YYYY-MM-DD HH24:MI'),
+      'fim_planejado',    to_char(v_ag.fim_planejado    at time zone public.fn_tz(), 'YYYY-MM-DD HH24:MI')),
+    jsonb_build_object(
+      'data', p_data,
+      'inicio_planejado', to_char(v_inicio at time zone public.fn_tz(), 'YYYY-MM-DD HH24:MI'),
+      'fim_planejado',    to_char(v_fim    at time zone public.fn_tz(), 'YYYY-MM-DD HH24:MI'),
+      'por_admin', v_por_admin),
+    case when v_por_admin
+         then 'Programacao alterada pela administracao'
+         else 'Programacao alterada pelo autor' end);
+
+  return jsonb_build_object('ok', true, 'id', v_ag.id);
+end $$;
+
+-- =============================================================================
+-- 10) ADMINISTRACAO
+-- =============================================================================
+
+create or replace function public.fn_admin_listar_funcionarios(p_token uuid)
+returns table (
+  id           uuid,
+  nome         text,
+  matricula    text,
+  setor        text,
+  papel        text,
+  ativo        boolean,
+  ultimo_login text
+)
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  return query
+    select f.id, f.nome, f.matricula, s.nome, f.papel, f.ativo,
+           case when f.ultimo_login_em is null then null else
+             to_char(f.ultimo_login_em at time zone public.fn_tz(), 'DD/MM/YYYY HH24:MI') end
+      from public.funcionarios f
+      join public.setores s on s.id = f.setor_id
+     order by f.ativo desc,
+              case f.papel when 'ADMIN_MASTER' then 0 when 'ADMIN' then 1 else 2 end,
+              f.nome;
+end $$;
+
+-- Concede ou retira o papel de ADMIN.
+--   ADMIN         so CONCEDE (papel destino 'ADMIN')
+--   ADMIN_MASTER  concede e RETIRA
+-- Ninguem altera o papel do ADMIN_MASTER, nem o proprio.
+create or replace function public.fn_admin_definir_papel(
+  p_token uuid, p_funcionario_id uuid, p_papel text
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func  public.funcionarios;
+  v_alvo  public.funcionarios;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  if p_papel not in ('FUNCIONARIO', 'ADMIN') then
+    raise exception 'PAPEL_INVALIDO' using errcode = 'P0001';
+  end if;
+
+  select * into v_alvo from public.funcionarios where id = p_funcionario_id;
+  if v_alvo.id is null then
+    raise exception 'FUNCIONARIO_NAO_ENCONTRADO' using errcode = 'P0001';
+  end if;
+
+  -- O administrador original e intocavel: e ele quem garante que sempre existe
+  -- alguem capaz de reorganizar as permissoes.
+  if v_alvo.papel = 'ADMIN_MASTER' then
+    raise exception 'ADMIN_MASTER_PROTEGIDO' using errcode = 'P0001';
+  end if;
+
+  if v_alvo.id = v_func.id then
+    raise exception 'PAPEL_PROPRIO_BLOQUEADO' using errcode = 'P0001';
+  end if;
+
+  -- Retirar o papel administrativo e privilegio exclusivo do master.
+  if p_papel = 'FUNCIONARIO' and v_alvo.papel = 'ADMIN' then
+    perform public.fn__exigir_master(v_func);
+  end if;
+
+  if v_alvo.papel = p_papel then
+    return jsonb_build_object('ok', true, 'papel', p_papel, 'inalterado', true);
+  end if;
+
+  update public.funcionarios set papel = p_papel where id = v_alvo.id;
+
+  perform public.fn__auditar(
+    v_func.id, null, 'PAPEL_ALTERADO', 'FUNCIONARIO', v_alvo.id::text,
+    jsonb_build_object('papel', v_alvo.papel, 'funcionario', v_alvo.nome),
+    jsonb_build_object('papel', p_papel, 'funcionario', v_alvo.nome),
+    'Papel de ' || v_alvo.nome || ' alterado por ' || v_func.nome);
+
+  return jsonb_build_object('ok', true, 'papel', p_papel);
+end $$;
+
+-- "Excluir" um funcionario = desativar.
+-- Apagar fisicamente e impossivel sem destruir os usos e a auditoria dele, que
+-- sao justamente o que nao pode ser alterado. Desativado, ele some da lista de
+-- login, nao consegue mais entrar, tem as sessoes encerradas, as programacoes
+-- futuras canceladas e libera vaga no limite de matriculas.
+create or replace function public.fn_admin_desativar_funcionario(
+  p_token uuid, p_funcionario_id uuid
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func      public.funcionarios;
+  v_alvo      public.funcionarios;
+  v_cancelados int := 0;
+  v_ag        record;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  select * into v_alvo from public.funcionarios where id = p_funcionario_id;
+  if v_alvo.id is null then
+    raise exception 'FUNCIONARIO_NAO_ENCONTRADO' using errcode = 'P0001';
+  end if;
+  if v_alvo.papel = 'ADMIN_MASTER' then
+    raise exception 'ADMIN_MASTER_PROTEGIDO' using errcode = 'P0001';
+  end if;
+  if v_alvo.id = v_func.id then
+    raise exception 'EXCLUSAO_PROPRIA_BLOQUEADA' using errcode = 'P0001';
+  end if;
+  if not v_alvo.ativo then
+    return jsonb_build_object('ok', true, 'inalterado', true);
+  end if;
+
+  -- Um uso em aberto e uma PTA fisicamente ocupada. Precisa ser encerrado antes.
+  if exists (select 1 from public.usos where funcionario_id = v_alvo.id and status = 'EM_USO') then
+    raise exception 'FUNCIONARIO_COM_USO_ABERTO' using errcode = 'P0001';
+  end if;
+
+  update public.funcionarios
+     set ativo = false, desativado_em = now(), desativado_por = v_func.id
+   where id = v_alvo.id;
+
+  update public.sessoes set encerrada_em = now()
+   where funcionario_id = v_alvo.id and encerrada_em is null;
+
+  -- Libera os horarios que ele tinha reservado daqui pra frente.
+  for v_ag in
+    select * from public.agendamentos
+     where funcionario_id = v_alvo.id and status = 'AGENDADO' and fim_planejado > now()
+  loop
+    update public.agendamentos
+       set status = 'CANCELADO', cancelado_em = now(),
+           motivo_status = 'Funcionario desativado pela administracao'
+     where id = v_ag.id;
+
+    perform public.fn__auditar(
+      v_func.id, v_ag.pta_id, 'AGENDAMENTO_CANCELADO', 'AGENDAMENTO', v_ag.id::text,
+      jsonb_build_object('status', 'AGENDADO'),
+      jsonb_build_object('status', 'CANCELADO', 'motivo', 'funcionario desativado'),
+      'Programacao cancelada junto com a desativacao de ' || v_alvo.nome);
+
+    v_cancelados := v_cancelados + 1;
+  end loop;
+
+  perform public.fn__auditar(
+    v_func.id, null, 'FUNCIONARIO_DESATIVADO', 'FUNCIONARIO', v_alvo.id::text,
+    jsonb_build_object('ativo', true, 'funcionario', v_alvo.nome,
+                       'matricula', v_alvo.matricula),
+    jsonb_build_object('ativo', false, 'agendamentos_cancelados', v_cancelados),
+    'Funcionario ' || v_alvo.nome || ' desativado por ' || v_func.nome);
+
+  return jsonb_build_object('ok', true, 'agendamentos_cancelados', v_cancelados);
+end $$;
+
+create or replace function public.fn_admin_reativar_funcionario(
+  p_token uuid, p_funcionario_id uuid
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func   public.funcionarios;
+  v_alvo   public.funcionarios;
+  v_limite int;
+  v_ativos int;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  select * into v_alvo from public.funcionarios where id = p_funcionario_id;
+  if v_alvo.id is null then
+    raise exception 'FUNCIONARIO_NAO_ENCONTRADO' using errcode = 'P0001';
+  end if;
+  if v_alvo.ativo then
+    return jsonb_build_object('ok', true, 'inalterado', true);
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('pta.cadastro_funcionario'));
+
+  select coalesce(nullif(valor, '')::int, 0) into v_limite
+    from public.configuracao where chave = 'limite_matriculas';
+
+  if coalesce(v_limite, 0) > 0 then
+    select count(*) into v_ativos from public.funcionarios where ativo;
+    if v_ativos >= v_limite then
+      raise exception 'LIMITE_MATRICULAS_ATINGIDO' using errcode = 'P0001';
+    end if;
+  end if;
+
+  update public.funcionarios
+     set ativo = true, desativado_em = null, desativado_por = null
+   where id = v_alvo.id;
+
+  perform public.fn__auditar(
+    v_func.id, null, 'FUNCIONARIO_REATIVADO', 'FUNCIONARIO', v_alvo.id::text,
+    jsonb_build_object('ativo', false),
+    jsonb_build_object('ativo', true, 'funcionario', v_alvo.nome),
+    'Funcionario ' || v_alvo.nome || ' reativado por ' || v_func.nome);
+
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- Limite de matriculas: exclusivo do ADMIN_MASTER. 0 = sem limite.
+create or replace function public.fn_admin_definir_limite_matriculas(
+  p_token uuid, p_limite int
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func   public.funcionarios;
+  v_antes  text;
+  v_ativos int;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_master(v_func);
+
+  if p_limite is null or p_limite < 0 then
+    raise exception 'LIMITE_INVALIDO' using errcode = 'P0001';
+  end if;
+
+  select count(*) into v_ativos from public.funcionarios where ativo;
+
+  -- Nao deixa definir um teto abaixo de quem ja esta ativo: isso deixaria o
+  -- sistema num estado invalido sem nenhuma acao capaz de corrigi-lo sozinha.
+  if p_limite > 0 and p_limite < v_ativos then
+    raise exception 'LIMITE_ABAIXO_DO_ATUAL' using errcode = 'P0001';
+  end if;
+
+  select valor into v_antes from public.configuracao where chave = 'limite_matriculas';
+
+  update public.configuracao
+     set valor = p_limite::text, atualizado_em = now(), atualizado_por = v_func.id
+   where chave = 'limite_matriculas';
+
+  perform public.fn__auditar(
+    v_func.id, null, 'LIMITE_MATRICULAS_ALTERADO', 'CONFIGURACAO', 'limite_matriculas',
+    jsonb_build_object('limite', v_antes),
+    jsonb_build_object('limite', p_limite::text, 'ativos_no_momento', v_ativos),
+    'Limite de matriculas alterado por ' || v_func.nome);
+
+  return jsonb_build_object('ok', true, 'limite', p_limite, 'ativos', v_ativos);
+end $$;
+
+create or replace function public.fn_admin_configuracao(p_token uuid)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func   public.funcionarios;
+  v_limite int;
+  v_ativos int;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  select coalesce(nullif(valor, '')::int, 0) into v_limite
+    from public.configuracao where chave = 'limite_matriculas';
+  select count(*) into v_ativos from public.funcionarios where ativo;
+
+  return jsonb_build_object(
+    'limite_matriculas', coalesce(v_limite, 0),
+    'ativos', v_ativos,
+    'vagas', case when coalesce(v_limite, 0) = 0 then null
+                  else greatest(v_limite - v_ativos, 0) end,
+    'pode_alterar_limite', (v_func.papel = 'ADMIN_MASTER'),
+    'matriculas_reservadas', (
+      select coalesce(jsonb_agg(jsonb_build_object(
+               'matricula', r.matricula,
+               'papel', r.papel,
+               'cadastrada', exists (select 1 from public.funcionarios f
+                                      where f.matricula = r.matricula))
+             order by r.matricula), '[]'::jsonb)
+        from public.matriculas_reservadas r));
+end $$;
+
+-- =============================================================================
 -- PERMISSOES DE EXECUCAO
 -- Somente estas funcoes ficam acessiveis ao frontend. As auxiliares internas
 -- (prefixo fn__) permanecem restritas.
@@ -1136,7 +1607,9 @@ revoke all on function
   public.fn__abrir_sessao(uuid),
   public.fn__func_publico(public.funcionarios),
   public.fn__local_para_utc(date, time),
-  public.fn__normalizar_codigo_pta(text)
+  public.fn__normalizar_codigo_pta(text),
+  public.fn__exigir_admin(public.funcionarios),
+  public.fn__exigir_master(public.funcionarios)
 from public, anon, authenticated;
 
 grant execute on function
@@ -1162,5 +1635,13 @@ grant execute on function
   public.fn_detalhe_registro(text, uuid),
   public.fn_historico(date, date, uuid, int),
   public.fn_minha_programacao(uuid),
-  public.fn_auditoria(int, uuid)
+  public.fn_auditoria(int, uuid),
+  public.fn_perfil_alterar_nome(uuid, text),
+  public.fn_agendamento_alterar(uuid, uuid, date, time, time),
+  public.fn_admin_listar_funcionarios(uuid),
+  public.fn_admin_definir_papel(uuid, uuid, text),
+  public.fn_admin_desativar_funcionario(uuid, uuid),
+  public.fn_admin_reativar_funcionario(uuid, uuid),
+  public.fn_admin_definir_limite_matriculas(uuid, int),
+  public.fn_admin_configuracao(uuid)
 to anon, authenticated;
