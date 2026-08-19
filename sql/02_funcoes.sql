@@ -2349,8 +2349,18 @@ begin
           v_func.id)
   returning * into v_pta;
 
+  -- pta_id fica NULO de proposito nos eventos de CICLO DE VIDA da PTA.
+  --
+  -- auditoria.pta_id e "on delete set null", e esse SET NULL e um UPDATE na
+  -- auditoria - que o gatilho de imutabilidade bloqueia. Com pta_id preenchido
+  -- aqui, toda PTA criada pelo app nascia impossivel de excluir.
+  --
+  -- Nada se perde: registro_id guarda o uuid e o payload guarda codigo,
+  -- descricao e local. A coluna pta_id serve ao historico OPERACIONAL (usos e
+  -- programacoes naquela PTA), e sao justamente esses registros que impedem a
+  -- exclusao - como deve ser.
   perform public.fn__auditar(
-    v_func.id, v_pta.id, 'PTA_CRIADA', 'PTA', v_pta.id::text,
+    v_func.id, null, 'PTA_CRIADA', 'PTA', v_pta.id::text,
     null, jsonb_build_object('codigo', v_pta.codigo, 'descricao', v_pta.descricao, 'local', v_pta.local),
     'PTA cadastrada por ' || v_func.nome);
 
@@ -2386,8 +2396,9 @@ begin
          local     = nullif(btrim(coalesce(p_local, '')), '')
    where id = p_pta_id;
 
+  -- pta_id nulo pelo mesmo motivo do fn_pta_criar.
   perform public.fn__auditar(
-    v_func.id, v_pta.id, 'PTA_ALTERADA', 'PTA', v_pta.id::text,
+    v_func.id, null, 'PTA_ALTERADA', 'PTA', v_pta.id::text,
     jsonb_build_object('codigo', v_pta.codigo, 'descricao', v_pta.descricao, 'local', v_pta.local),
     jsonb_build_object('codigo', v_codigo,
                        'descricao', nullif(btrim(coalesce(p_descricao, '')), ''),
@@ -2428,8 +2439,9 @@ begin
          desativado_por = case when p_ativo then null else v_func.id end
    where id = p_pta_id;
 
+  -- pta_id nulo pelo mesmo motivo do fn_pta_criar.
   perform public.fn__auditar(
-    v_func.id, v_pta.id,
+    v_func.id, null,
     case when p_ativo then 'PTA_REATIVADA' else 'PTA_DESATIVADA' end,
     'PTA', v_pta.id::text,
     jsonb_build_object('ativo', v_pta.ativo),

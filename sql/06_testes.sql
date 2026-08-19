@@ -83,7 +83,7 @@ declare
   v_int2      int;
   v_bool2     boolean;
   v_ts        timestamptz;
-  v_hora_passada text;
+  v_hora_passada time;
 begin
   v_local   := now() at time zone public.fn_tz();
   v_ultima  := v_local::date + time '23:59';
@@ -223,12 +223,16 @@ begin
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T13 horario final anterior ao inicial (item 12)
-  v_desc := 'T13 fim pretendido no passado e recusado'; v_erro := null;
+  -- Desde o item 10 um horario que ja passou NAO e mais recusado de cara: ele
+  -- e lido como a madrugada do dia seguinte. Quem barra o exagero passou a ser
+  -- o teto de duracao (pedir 1h atras equivale a ~23h de uso).
+  -- O T117 cobre o outro lado: com teto alto, o dia seguinte e aceito.
+  v_desc := 'T13 fim que ja passou vira amanha e estoura o teto de duracao'; v_erro := null;
   begin
     perform public.fn_uso_iniciar(v_ta, 'PTA-901',
-      (to_char(now() at time zone public.fn_tz() - interval '1 hour', 'HH24:MI'))::time);
+      ((now() at time zone public.fn_tz()) - interval '1 hour')::time);
   exception when others then v_erro := sqlerrm; end;
-  if v_erro = 'HORARIO_FINAL_ANTERIOR' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  if v_erro = 'DURACAO_EXCESSIVA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n'; end if;
 
   -- T14 inicio de uso (REGRA 5, 8, 9)
@@ -895,8 +899,8 @@ begin
     v_ciclico := (v_r->>'id')::uuid;
   exception when others then v_erro := sqlerrm; end;
   select count(*) into v_int from public.agendamentos where ciclico_id = v_ciclico;
-  -- ~90 dias com 3 dias por semana => algo em torno de 38 ocorrencias
-  if v_erro is null and v_int between 30 and 45 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' ocorrencias)' || E'\n';
+  -- 365 dias com 3 dias por semana => algo em torno de 156 ocorrencias
+  if v_erro is null and v_int between 145 and 165 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' ocorrencias)' || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
 
   -- T86 as ocorrencias caem exatamente nos dias pedidos
@@ -915,7 +919,8 @@ begin
     v_ciclico2 := (v_r->>'id')::uuid;
   exception when others then v_erro := sqlerrm; end;
   select count(*) into v_int from public.agendamentos where ciclico_id = v_ciclico2;
-  if v_erro is null and v_int between 7 and 10 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' ocorrencias)' || E'\n';
+  -- 365 dias a cada 10 => 36 ou 37 ocorrencias
+  if v_erro is null and v_int between 34 and 38 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' ocorrencias)' || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
 
   -- T88 o ciclico fica em nome do funcionario escolhido, nao do administrador
@@ -1249,8 +1254,8 @@ begin
   -- So faz sentido testar quando o horario escolhido REALMENTE ja passou hoje,
   -- entao o teste usa uma hora atras.
   v_desc := 'T117 horario anterior ao atual vira o dia seguinte'; v_erro := null;
-  v_hora_passada := to_char((now() at time zone public.fn_tz()) - interval '1 hour', 'HH24:MI');
-  if v_hora_passada > '01:00' then
+  v_hora_passada := ((now() at time zone public.fn_tz()) - interval '1 hour')::time;
+  if v_hora_passada > time '01:00' then
     begin
       -- limite alto para o teste nao esbarrar em DURACAO_EXCESSIVA
       perform public.fn_admin_definir_max_horas_uso(v_tadm, 24);
@@ -1258,7 +1263,7 @@ begin
       select fim_pretendido into v_ts from public.usos where id = (v_r->>'uso_id')::uuid;
     exception when others then v_erro := sqlerrm; end;
     if v_erro is null and v_ts > now() then
-      v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_hora_passada || ' -> amanha)' || E'\n';
+      v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || to_char(v_hora_passada, 'HH24:MI') || ' -> amanha)' || E'\n';
     else
       v_falha := v_falha + 1;
       v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_ts::text, '(nulo)') || E'\n';
