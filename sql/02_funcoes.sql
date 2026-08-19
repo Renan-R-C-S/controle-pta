@@ -123,7 +123,9 @@ language sql stable security definer set search_path = public, extensions as $$
     'setor',      (select nome from public.setores where id = p_func.setor_id),
     'papel',      p_func.papel,
     'admin',      (p_func.papel in ('ADMIN', 'ADMIN_MASTER')),
-    'master',     (p_func.papel = 'ADMIN_MASTER')
+    'master',     (p_func.papel = 'ADMIN_MASTER'),
+    -- PIN definido por um administrador: a tela obriga a troca antes de seguir
+    'pin_provisorio', coalesce(p_func.pin_provisorio, false)
   );
 $$;
 
@@ -219,7 +221,7 @@ begin
   end if;
 
   -- REGRA 2
-  if coalesce(p_pin, '') !~ '^[0-9]{4}$' then
+  if coalesce(p_pin, '') !~ '^[0-9]{4,10}$' then
     raise exception 'PIN_FORMATO' using errcode = 'P0001';
   end if;
 
@@ -294,7 +296,7 @@ begin
     raise exception 'CONTA_BLOQUEADA' using errcode = 'P0001';
   end if;
 
-  if coalesce(p_pin, '') !~ '^[0-9]{4}$' then
+  if coalesce(p_pin, '') !~ '^[0-9]{4,10}$' then
     raise exception 'PIN_FORMATO' using errcode = 'P0001';
   end if;
 
@@ -528,11 +530,22 @@ begin
   v_hoje := (v_agora at time zone public.fn_tz())::date;
   v_fim  := public.fn__local_para_utc(v_hoje, p_fim_pretendido);
 
-  -- Item 12: o fim pretendido precisa ser posterior ao inicio.
-  -- MVP: uso dentro do mesmo dia (decisao documentada em docs/DECISOES.md).
+  -- VIRADA DA MEIA-NOITE: as 23h, escolher 01:00 significa a madrugada do dia
+  -- SEGUINTE. Antes disso o horario caia no passado e o uso era recusado -
+  -- exatamente o caso de quem entra no turno da noite.
+  if v_fim <= v_agora then
+    v_fim := public.fn__local_para_utc(v_hoje + 1, p_fim_pretendido);
+  end if;
+
+  -- Somou um dia e ainda esta no passado: so acontece com relogio fora de
+  -- sincronia. Melhor recusar do que gravar um horario incoerente.
   if v_fim <= v_agora then
     raise exception 'HORARIO_FINAL_ANTERIOR' using errcode = 'P0001';
   end if;
+
+  -- Quem escolhe um horario que ja passou hoje recebe o dia seguinte, e o teto
+  -- de duracao logo abaixo e que decide se isso e razoavel: as 23h pedir 22:00
+  -- vira 23 horas de uso e cai em DURACAO_EXCESSIVA, como deve ser.
 
   -- Teto de duracao definido pelos administradores (nao mais fixo em 14h).
   select coalesce(nullif(valor, '')::int, 14) into v_max_horas
@@ -1657,7 +1670,7 @@ begin
     'pode_alterar_limite', (v_func.papel = 'ADMIN_MASTER'),
     'max_horas_uso_aberto', (select coalesce(nullif(valor, '')::int, 14)
                                from public.configuracao where chave = 'max_horas_uso_aberto'),
-    'horizonte_ciclico_dias', (select coalesce(nullif(valor, '')::int, 90)
+    'horizonte_ciclico_dias', (select coalesce(nullif(valor, '')::int, 365)
                                  from public.configuracao where chave = 'horizonte_ciclico_dias'),
     'usos_abertos_excedidos', (
       select count(*) from public.usos u
@@ -1886,10 +1899,14 @@ begin
 
   v_dia := v_de;
   while v_dia <= v_ate loop
+    -- O laco caminha por datas reais, entao 'todo dia 31' simplesmente nao casa
+    -- em fevereiro: o mes e pulado, sem empurrar a ocorrencia para o dia 1.
     if (v_c.tipo = 'DIAS_SEMANA'
         and extract(dow from v_dia)::smallint = any(v_c.dias_semana))
        or (v_c.tipo = 'INTERVALO_DIAS'
         and ((v_dia - v_c.data_inicio) % v_c.intervalo_dias) = 0)
+       or (v_c.tipo = 'DIA_DO_MES'
+        and extract(day from v_dia)::smallint = v_c.dia_do_mes)
     then
       v_inicio := public.fn__local_para_utc(v_dia, v_c.hora_inicio);
       v_fim    := public.fn__local_para_utc(v_dia, v_c.hora_fim);
@@ -1925,6 +1942,9 @@ begin
   return jsonb_build_object('criados', v_criados, 'pulados', v_pulados, 'ate', v_ate);
 end $$;
 
+drop function if exists public.fn_ciclico_criar(
+  uuid, uuid, uuid, time, time, text, smallint[], int, date, date, uuid);
+
 create or replace function public.fn_ciclico_criar(
   p_token          uuid,
   p_pta_id         uuid,
@@ -1934,6 +1954,7 @@ create or replace function public.fn_ciclico_criar(
   p_tipo           text,
   p_dias_semana    smallint[] default null,
   p_intervalo_dias int default null,
+  p_dia_do_mes     int default null,
   p_data_inicio    date default null,
   p_data_fim       date default null,
   p_fornecedor_id  uuid default null
@@ -1962,8 +1983,12 @@ begin
     raise exception 'HORARIO_FINAL_ANTERIOR' using errcode = 'P0001';
   end if;
 
-  if p_tipo not in ('DIAS_SEMANA', 'INTERVALO_DIAS') then
+  if p_tipo not in ('DIAS_SEMANA', 'INTERVALO_DIAS', 'DIA_DO_MES') then
     raise exception 'CICLO_TIPO_INVALIDO' using errcode = 'P0001';
+  end if;
+  if p_tipo = 'DIA_DO_MES'
+     and (p_dia_do_mes is null or p_dia_do_mes < 1 or p_dia_do_mes > 31) then
+    raise exception 'CICLO_DIA_DO_MES_INVALIDO' using errcode = 'P0001';
   end if;
   if p_tipo = 'DIAS_SEMANA'
      and (p_dias_semana is null or array_length(p_dias_semana, 1) is null) then
@@ -1983,11 +2008,13 @@ begin
 
   insert into public.agendamentos_ciclicos (
     pta_id, funcionario_id, hora_inicio, hora_fim, tipo,
-    dias_semana, intervalo_dias, data_inicio, data_fim, fornecedor_id, criado_por)
+    dias_semana, intervalo_dias, dia_do_mes, data_inicio, data_fim,
+    fornecedor_id, criado_por)
   values (
     p_pta_id, p_funcionario_id, p_hora_inicio, p_hora_fim, p_tipo,
     case when p_tipo = 'DIAS_SEMANA'    then p_dias_semana end,
     case when p_tipo = 'INTERVALO_DIAS' then p_intervalo_dias::smallint end,
+    case when p_tipo = 'DIA_DO_MES'     then p_dia_do_mes::smallint end,
     v_inicio, p_data_fim, p_fornecedor_id, v_func.id)
   returning * into v_c;
 
@@ -1996,17 +2023,18 @@ begin
     null,
     jsonb_build_object(
       'tipo', p_tipo, 'dias_semana', p_dias_semana, 'intervalo_dias', p_intervalo_dias,
+      'dia_do_mes', p_dia_do_mes,
       'hora_inicio', p_hora_inicio, 'hora_fim', p_hora_fim,
       'data_inicio', v_inicio, 'data_fim', p_data_fim,
       'funcionario_id', p_funcionario_id),
     'Agendamento ciclico criado por ' || v_func.nome);
 
-  select coalesce(nullif(valor, '')::int, 90) into v_horizonte
+  select coalesce(nullif(valor, '')::int, 365) into v_horizonte
     from public.configuracao where chave = 'horizonte_ciclico_dias';
 
   v_res := public.fn__ciclico_gerar(
              v_c.id,
-             (now() at time zone public.fn_tz())::date + coalesce(v_horizonte, 90),
+             (now() at time zone public.fn_tz())::date + coalesce(v_horizonte, 365),
              v_func.id);
 
   return jsonb_build_object(
@@ -2039,6 +2067,7 @@ begin
              'tipo', c.tipo,
              'dias_semana', c.dias_semana,
              'intervalo_dias', c.intervalo_dias,
+             'dia_do_mes', c.dia_do_mes,
              'data_inicio', to_char(c.data_inicio, 'DD/MM/YYYY'),
              'data_fim', case when c.data_fim is null then null else to_char(c.data_fim, 'DD/MM/YYYY') end,
              'gerado_ate', case when c.gerado_ate is null then null else to_char(c.gerado_ate, 'DD/MM/YYYY') end,
@@ -2135,13 +2164,709 @@ begin
 
   perform public.fn__exigir_gestao(v_func, v_c.criado_por);
 
-  select coalesce(nullif(valor, '')::int, 90) into v_horizonte
+  select coalesce(nullif(valor, '')::int, 365) into v_horizonte
     from public.configuracao where chave = 'horizonte_ciclico_dias';
 
   return public.fn__ciclico_gerar(
            v_c.id,
-           (now() at time zone public.fn_tz())::date + coalesce(v_horizonte, 90),
+           (now() at time zone public.fn_tz())::date + coalesce(v_horizonte, 365),
            v_func.id);
+end $$;
+
+-- =============================================================================
+-- 16) REDEFINICAO DE PIN
+-- =============================================================================
+
+-- Troca do proprio PIN. Exige o PIN atual: sem isso, uma sessao esquecida
+-- aberta no celular deixaria qualquer um trocar a senha do dono.
+create or replace function public.fn_perfil_trocar_pin(
+  p_token uuid, p_pin_atual text, p_pin_novo text
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+begin
+  v_func := public.fn__sessao(p_token);
+
+  if coalesce(p_pin_novo, '') !~ '^[0-9]{4,10}$' then
+    raise exception 'PIN_FORMATO' using errcode = 'P0001';
+  end if;
+
+  select * into v_func from public.funcionarios where id = v_func.id;
+
+  if v_func.pin_hash <> crypt(coalesce(p_pin_atual, ''), v_func.pin_hash) then
+    raise exception 'PIN_ATUAL_INCORRETO' using errcode = 'P0001';
+  end if;
+
+  if p_pin_novo = p_pin_atual then
+    raise exception 'PIN_IGUAL_AO_ATUAL' using errcode = 'P0001';
+  end if;
+
+  update public.funcionarios
+     set pin_hash = crypt(p_pin_novo, gen_salt('bf', 10)),
+         pin_provisorio = false,
+         pin_alterado_em = now()
+   where id = v_func.id;
+
+  -- O PIN em si nunca aparece na auditoria - nem o antigo, nem o novo.
+  perform public.fn__auditar(
+    v_func.id, null, 'PIN_ALTERADO', 'FUNCIONARIO', v_func.id::text,
+    null, null, 'PIN alterado pelo proprio colaborador');
+
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- Reset feito pela administracao, para quem esqueceu o PIN.
+-- O PIN nasce PROVISORIO: a pessoa entra com ele e e obrigada a trocar. Assim o
+-- administrador nao segue conhecendo a senha de ninguem.
+create or replace function public.fn_admin_resetar_pin(
+  p_token uuid, p_funcionario_id uuid, p_pin_novo text
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+  v_alvo public.funcionarios;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  if coalesce(p_pin_novo, '') !~ '^[0-9]{4,10}$' then
+    raise exception 'PIN_FORMATO' using errcode = 'P0001';
+  end if;
+
+  select * into v_alvo from public.funcionarios where id = p_funcionario_id;
+  if v_alvo.id is null then
+    raise exception 'FUNCIONARIO_NAO_ENCONTRADO' using errcode = 'P0001';
+  end if;
+
+  -- O PIN do administrador principal so ele proprio troca.
+  if v_alvo.papel = 'ADMIN_MASTER' and v_func.papel <> 'ADMIN_MASTER' then
+    raise exception 'ADMIN_MASTER_PROTEGIDO' using errcode = 'P0001';
+  end if;
+
+  update public.funcionarios
+     set pin_hash = crypt(p_pin_novo, gen_salt('bf', 10)),
+         pin_provisorio = true,
+         pin_alterado_em = now(),
+         tentativas_falhas = 0,
+         bloqueado_ate = null
+   where id = v_alvo.id;
+
+  -- Sessoes abertas do alvo caem: se alguem estava usando a conta, para aqui.
+  delete from public.sessoes where funcionario_id = v_alvo.id;
+
+  perform public.fn__auditar(
+    v_func.id, null, 'PIN_RESETADO', 'FUNCIONARIO', v_alvo.id::text,
+    null, jsonb_build_object('provisorio', true),
+    'PIN redefinido por ' || v_func.nome || '. Troca obrigatoria no proximo acesso.');
+
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- =============================================================================
+-- 17) PTAs GERENCIADAS PELA ADMINISTRACAO
+-- =============================================================================
+
+-- Aceita 'PTA-905', 'pta 905' ou simplesmente '905'.
+create or replace function public.fn__pta_codigo(p_bruto text)
+returns text
+language plpgsql immutable as $$
+declare
+  v text := upper(btrim(coalesce(p_bruto, '')));
+  v_num text;
+begin
+  v_num := regexp_replace(v, '[^0-9]', '', 'g');
+  if v_num = '' or char_length(v_num) < 3 or char_length(v_num) > 4 then
+    raise exception 'PTA_CODIGO_INVALIDO' using errcode = 'P0001';
+  end if;
+  return 'PTA-' || v_num;
+end $$;
+
+create or replace function public.fn_admin_listar_ptas(p_token uuid)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  return (
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'id', p.id,
+             'codigo', p.codigo,
+             'descricao', p.descricao,
+             'local', p.local,
+             'ativo', p.ativo,
+             'em_uso', exists (select 1 from public.usos u
+                                where u.pta_id = p.id and u.status = 'EM_USO'),
+             'programacoes_futuras', (
+               select count(*) from public.agendamentos a
+                where a.pta_id = p.id and a.status = 'AGENDADO' and a.fim_planejado > now()),
+             -- Sem historico nenhum a PTA pode ser apagada de verdade.
+             'pode_excluir', not exists (select 1 from public.usos u where u.pta_id = p.id)
+                         and not exists (select 1 from public.agendamentos a where a.pta_id = p.id)
+                         and not exists (select 1 from public.agendamentos_ciclicos c where c.pta_id = p.id)
+           ) order by p.ativo desc, p.codigo), '[]'::jsonb)
+      from public.ptas p);
+end $$;
+
+create or replace function public.fn_pta_criar(
+  p_token uuid, p_codigo text, p_descricao text default null, p_local text default null
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func   public.funcionarios;
+  v_pta    public.ptas;
+  v_codigo text;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  v_codigo := public.fn__pta_codigo(p_codigo);
+
+  if exists (select 1 from public.ptas where codigo = v_codigo) then
+    raise exception 'PTA_CODIGO_DUPLICADO' using errcode = 'P0001';
+  end if;
+
+  insert into public.ptas (codigo, descricao, local, criado_por)
+  values (v_codigo,
+          nullif(btrim(coalesce(p_descricao, '')), ''),
+          nullif(btrim(coalesce(p_local, '')), ''),
+          v_func.id)
+  returning * into v_pta;
+
+  perform public.fn__auditar(
+    v_func.id, v_pta.id, 'PTA_CRIADA', 'PTA', v_pta.id::text,
+    null, jsonb_build_object('codigo', v_pta.codigo, 'descricao', v_pta.descricao, 'local', v_pta.local),
+    'PTA cadastrada por ' || v_func.nome);
+
+  return jsonb_build_object('id', v_pta.id, 'codigo', v_pta.codigo);
+end $$;
+
+create or replace function public.fn_pta_alterar(
+  p_token uuid, p_pta_id uuid, p_codigo text, p_descricao text default null, p_local text default null
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func   public.funcionarios;
+  v_pta    public.ptas;
+  v_codigo text;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  select * into v_pta from public.ptas where id = p_pta_id;
+  if v_pta.id is null then
+    raise exception 'PTA_NAO_ENCONTRADA' using errcode = 'P0001';
+  end if;
+
+  v_codigo := public.fn__pta_codigo(p_codigo);
+
+  if exists (select 1 from public.ptas where codigo = v_codigo and id <> p_pta_id) then
+    raise exception 'PTA_CODIGO_DUPLICADO' using errcode = 'P0001';
+  end if;
+
+  update public.ptas
+     set codigo    = v_codigo,
+         descricao = nullif(btrim(coalesce(p_descricao, '')), ''),
+         local     = nullif(btrim(coalesce(p_local, '')), '')
+   where id = p_pta_id;
+
+  perform public.fn__auditar(
+    v_func.id, v_pta.id, 'PTA_ALTERADA', 'PTA', v_pta.id::text,
+    jsonb_build_object('codigo', v_pta.codigo, 'descricao', v_pta.descricao, 'local', v_pta.local),
+    jsonb_build_object('codigo', v_codigo,
+                       'descricao', nullif(btrim(coalesce(p_descricao, '')), ''),
+                       'local', nullif(btrim(coalesce(p_local, '')), '')),
+    'PTA alterada por ' || v_func.nome);
+
+  return jsonb_build_object('ok', true, 'codigo', v_codigo);
+end $$;
+
+-- Habilita/desabilita. Desabilitada, a PTA some das telas de escolha, mas o
+-- historico dela continua inteiro.
+create or replace function public.fn_pta_definir_ativo(
+  p_token uuid, p_pta_id uuid, p_ativo boolean
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+  v_pta  public.ptas;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  select * into v_pta from public.ptas where id = p_pta_id;
+  if v_pta.id is null then
+    raise exception 'PTA_NAO_ENCONTRADA' using errcode = 'P0001';
+  end if;
+
+  -- Desabilitar uma PTA com uso aberto deixaria alguem preso: alem de sumir da
+  -- tela, a pessoa ainda precisa finalizar o que comecou.
+  if not p_ativo and exists (
+       select 1 from public.usos where pta_id = p_pta_id and status = 'EM_USO') then
+    raise exception 'PTA_COM_USO_ABERTO' using errcode = 'P0001';
+  end if;
+
+  update public.ptas
+     set ativo = p_ativo,
+         desativado_em  = case when p_ativo then null else now() end,
+         desativado_por = case when p_ativo then null else v_func.id end
+   where id = p_pta_id;
+
+  perform public.fn__auditar(
+    v_func.id, v_pta.id,
+    case when p_ativo then 'PTA_REATIVADA' else 'PTA_DESATIVADA' end,
+    'PTA', v_pta.id::text,
+    jsonb_build_object('ativo', v_pta.ativo),
+    jsonb_build_object('ativo', p_ativo),
+    case when p_ativo then 'PTA habilitada por ' else 'PTA desabilitada por ' end || v_func.nome);
+
+  return jsonb_build_object('ok', true, 'ativo', p_ativo);
+end $$;
+
+-- Exclusao de verdade, permitida APENAS enquanto a PTA nao tem historico.
+-- Com uso ou programacao registrada, apagar destruiria o passado - nesse caso a
+-- saida e desabilitar.
+create or replace function public.fn_pta_excluir(p_token uuid, p_pta_id uuid)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+  v_pta  public.ptas;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  select * into v_pta from public.ptas where id = p_pta_id;
+  if v_pta.id is null then
+    raise exception 'PTA_NAO_ENCONTRADA' using errcode = 'P0001';
+  end if;
+
+  if exists (select 1 from public.usos where pta_id = p_pta_id)
+     or exists (select 1 from public.agendamentos where pta_id = p_pta_id)
+     or exists (select 1 from public.agendamentos_ciclicos where pta_id = p_pta_id) then
+    raise exception 'PTA_COM_HISTORICO' using errcode = 'P0001';
+  end if;
+
+  perform public.fn__auditar(
+    v_func.id, null, 'PTA_EXCLUIDA', 'PTA', v_pta.id::text,
+    jsonb_build_object('codigo', v_pta.codigo, 'descricao', v_pta.descricao, 'local', v_pta.local),
+    null, 'PTA excluida por ' || v_func.nome || ' (nunca teve uso nem programacao)');
+
+  delete from public.ptas where id = p_pta_id;
+
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- =============================================================================
+-- 18) MATRICULAS RESERVADAS (somente ADMIN_MASTER)
+-- =============================================================================
+
+create or replace function public.fn_admin_reservadas(p_token uuid)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_master(v_func);
+
+  return (
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'matricula', r.matricula,
+             'papel', r.papel,
+             'observacao', r.observacao,
+             -- Reserva ja usada: existe colaborador ATIVO com essa matricula.
+             'em_uso_por', (select f.nome from public.funcionarios f
+                             where f.matricula = r.matricula and f.ativo limit 1)
+           ) order by r.matricula), '[]'::jsonb)
+      from public.matriculas_reservadas r);
+end $$;
+
+-- Cria ou atualiza uma reserva. A matricula passa pela mesma normalizacao do
+-- cadastro ('591' vira '0591'), senao a reserva nunca casaria com a pessoa.
+create or replace function public.fn_reservada_salvar(
+  p_token uuid, p_matricula text, p_papel text, p_observacao text default null
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func  public.funcionarios;
+  v_matr  text := btrim(coalesce(p_matricula, ''));
+  v_antes public.matriculas_reservadas;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_master(v_func);
+
+  if v_matr !~ '^[0-9]{1,10}$' then
+    raise exception 'MATRICULA_FORMATO' using errcode = 'P0001';
+  end if;
+  if char_length(v_matr) < 4 then
+    v_matr := lpad(v_matr, 4, '0');
+  end if;
+
+  if p_papel not in ('ADMIN', 'ADMIN_MASTER') then
+    raise exception 'PAPEL_INVALIDO' using errcode = 'P0001';
+  end if;
+
+  select * into v_antes from public.matriculas_reservadas where matricula = v_matr;
+
+  insert into public.matriculas_reservadas (matricula, papel, observacao)
+  values (v_matr, p_papel, nullif(btrim(coalesce(p_observacao, '')), ''))
+  on conflict (matricula) do update
+    set papel = excluded.papel, observacao = excluded.observacao;
+
+  perform public.fn__auditar(
+    v_func.id, null,
+    case when v_antes.matricula is null then 'RESERVADA_CRIADA' else 'RESERVADA_ALTERADA' end,
+    'RESERVADA', v_matr,
+    case when v_antes.matricula is null then null
+         else jsonb_build_object('papel', v_antes.papel, 'observacao', v_antes.observacao) end,
+    jsonb_build_object('papel', p_papel, 'observacao', nullif(btrim(coalesce(p_observacao, '')), '')),
+    'Matricula reservada definida por ' || v_func.nome);
+
+  return jsonb_build_object('ok', true, 'matricula', v_matr);
+end $$;
+
+create or replace function public.fn_reservada_excluir(p_token uuid, p_matricula text)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func  public.funcionarios;
+  v_antes public.matriculas_reservadas;
+  v_matr  text := btrim(coalesce(p_matricula, ''));
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_master(v_func);
+
+  if char_length(v_matr) < 4 then
+    v_matr := lpad(v_matr, 4, '0');
+  end if;
+
+  select * into v_antes from public.matriculas_reservadas where matricula = v_matr;
+  if v_antes.matricula is null then
+    raise exception 'RESERVADA_NAO_ENCONTRADA' using errcode = 'P0001';
+  end if;
+
+  delete from public.matriculas_reservadas where matricula = v_matr;
+
+  -- Apagar a reserva NAO rebaixa quem ja se cadastrou com ela: o papel de uma
+  -- pessoa se muda pela tela de papeis, nao por efeito colateral.
+  perform public.fn__auditar(
+    v_func.id, null, 'RESERVADA_EXCLUIDA', 'RESERVADA', v_matr,
+    jsonb_build_object('papel', v_antes.papel, 'observacao', v_antes.observacao),
+    null, 'Reserva removida por ' || v_func.nome);
+
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- =============================================================================
+-- 19) HORIZONTE DOS CICLICOS (somente ADMIN_MASTER)
+-- =============================================================================
+
+create or replace function public.fn_admin_definir_horizonte_ciclico(
+  p_token uuid, p_dias int
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func  public.funcionarios;
+  v_antes text;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_master(v_func);
+
+  if p_dias is null or p_dias < 7 or p_dias > 1095 then
+    raise exception 'HORIZONTE_INVALIDO' using errcode = 'P0001';
+  end if;
+
+  select valor into v_antes from public.configuracao where chave = 'horizonte_ciclico_dias';
+
+  update public.configuracao
+     set valor = p_dias::text, atualizado_em = now(), atualizado_por = v_func.id
+   where chave = 'horizonte_ciclico_dias';
+
+  perform public.fn__auditar(
+    v_func.id, null, 'CONFIGURACAO_ALTERADA', 'CONFIGURACAO', 'horizonte_ciclico_dias',
+    jsonb_build_object('dias', v_antes), jsonb_build_object('dias', p_dias::text),
+    'Horizonte de geracao dos ciclicos alterado por ' || v_func.nome);
+
+  return jsonb_build_object('ok', true, 'dias', p_dias);
+end $$;
+
+-- =============================================================================
+-- 20) AVISOS
+-- =============================================================================
+
+-- Avisos que alcancam quem esta logado, para o popup pos-login.
+-- Sem destino cadastrado o aviso e geral; com destinos, vale a uniao entre
+-- setores e pessoas escolhidas.
+create or replace function public.fn_avisos_para_mim(p_token uuid)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+begin
+  v_func := public.fn__sessao(p_token);
+
+  return (
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'id', a.id,
+             'titulo', a.titulo,
+             'mensagem', a.mensagem,
+             'autor', f.nome,
+             'criado_em', to_char(a.criado_em at time zone public.fn_tz(), 'DD/MM/YYYY HH24:MI'),
+             'fim_em', case when a.fim_em is null then null
+                            else to_char(a.fim_em at time zone public.fn_tz(), 'DD/MM/YYYY HH24:MI') end
+           ) order by a.criado_em desc), '[]'::jsonb)
+      from public.avisos a
+      join public.funcionarios f on f.id = a.criado_por
+     where a.ativo
+       and (a.inicio_em is null or a.inicio_em <= now())
+       and (a.fim_em    is null or a.fim_em    >  now())
+       and (
+             (    not exists (select 1 from public.avisos_setores      s where s.aviso_id = a.id)
+              and not exists (select 1 from public.avisos_funcionarios d where d.aviso_id = a.id))
+          or exists (select 1 from public.avisos_setores s
+                      where s.aviso_id = a.id and s.setor_id = v_func.setor_id)
+          or exists (select 1 from public.avisos_funcionarios d
+                      where d.aviso_id = a.id and d.funcionario_id = v_func.id)
+           ));
+end $$;
+
+create or replace function public.fn_aviso_criar(
+  p_token      uuid,
+  p_titulo     text,
+  p_mensagem   text,
+  p_setores    uuid[] default null,
+  p_pessoas    uuid[] default null,
+  p_inicio_em  timestamptz default null,
+  p_fim_em     timestamptz default null
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func  public.funcionarios;
+  v_aviso public.avisos;
+  v_tit   text := btrim(coalesce(p_titulo, ''));
+  v_msg   text := btrim(coalesce(p_mensagem, ''));
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  if char_length(v_tit) < 3 or char_length(v_tit) > 80 then
+    raise exception 'AVISO_TITULO_INVALIDO' using errcode = 'P0001';
+  end if;
+  if char_length(v_msg) < 3 or char_length(v_msg) > 600 then
+    raise exception 'AVISO_MENSAGEM_INVALIDA' using errcode = 'P0001';
+  end if;
+  if p_fim_em is not null and p_fim_em <= coalesce(p_inicio_em, now()) then
+    raise exception 'AVISO_PRAZO_INVALIDO' using errcode = 'P0001';
+  end if;
+
+  insert into public.avisos (titulo, mensagem, inicio_em, fim_em, criado_por)
+  values (v_tit, v_msg, p_inicio_em, p_fim_em, v_func.id)
+  returning * into v_aviso;
+
+  if p_setores is not null and array_length(p_setores, 1) > 0 then
+    insert into public.avisos_setores (aviso_id, setor_id)
+    select v_aviso.id, s.id from public.setores s where s.id = any(p_setores)
+    on conflict do nothing;
+  end if;
+
+  if p_pessoas is not null and array_length(p_pessoas, 1) > 0 then
+    insert into public.avisos_funcionarios (aviso_id, funcionario_id)
+    select v_aviso.id, f.id from public.funcionarios f where f.id = any(p_pessoas)
+    on conflict do nothing;
+  end if;
+
+  perform public.fn__auditar(
+    v_func.id, null, 'AVISO_CRIADO', 'AVISO', v_aviso.id::text,
+    null,
+    jsonb_build_object('titulo', v_tit,
+                       'setores', coalesce(array_length(p_setores, 1), 0),
+                       'pessoas', coalesce(array_length(p_pessoas, 1), 0),
+                       'fim_em', p_fim_em),
+    'Aviso criado por ' || v_func.nome);
+
+  return jsonb_build_object('id', v_aviso.id);
+end $$;
+
+create or replace function public.fn_aviso_listar(p_token uuid)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func public.funcionarios;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  return (
+    select coalesce(jsonb_agg(jsonb_build_object(
+             'id', a.id,
+             'titulo', a.titulo,
+             'mensagem', a.mensagem,
+             'ativo', a.ativo,
+             'autor', f.nome,
+             'do_master', (f.papel = 'ADMIN_MASTER'),
+             'criado_em', to_char(a.criado_em at time zone public.fn_tz(), 'DD/MM/YYYY HH24:MI'),
+             'inicio_em', case when a.inicio_em is null then null
+                               else to_char(a.inicio_em at time zone public.fn_tz(), 'DD/MM/YYYY HH24:MI') end,
+             'fim_em', case when a.fim_em is null then null
+                            else to_char(a.fim_em at time zone public.fn_tz(), 'DD/MM/YYYY HH24:MI') end,
+             'vigente', (a.ativo
+                         and (a.inicio_em is null or a.inicio_em <= now())
+                         and (a.fim_em    is null or a.fim_em    >  now())),
+             'setores', (select coalesce(jsonb_agg(s.nome order by s.nome), '[]'::jsonb)
+                           from public.avisos_setores x
+                           join public.setores s on s.id = x.setor_id
+                          where x.aviso_id = a.id),
+             'pessoas', (select coalesce(jsonb_agg(p.nome order by p.nome), '[]'::jsonb)
+                           from public.avisos_funcionarios y
+                           join public.funcionarios p on p.id = y.funcionario_id
+                          where y.aviso_id = a.id)
+           ) order by a.ativo desc, a.criado_em desc), '[]'::jsonb)
+      from public.avisos a
+      join public.funcionarios f on f.id = a.criado_por);
+end $$;
+
+create or replace function public.fn_aviso_definir_ativo(
+  p_token uuid, p_aviso_id uuid, p_ativo boolean
+) returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func  public.funcionarios;
+  v_aviso public.avisos;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  select * into v_aviso from public.avisos where id = p_aviso_id;
+  if v_aviso.id is null then
+    raise exception 'AVISO_NAO_ENCONTRADO' using errcode = 'P0001';
+  end if;
+
+  perform public.fn__exigir_gestao(v_func, v_aviso.criado_por);
+
+  update public.avisos
+     set ativo = p_ativo,
+         atualizado_em = now(),
+         desativado_em  = case when p_ativo then null else now() end,
+         desativado_por = case when p_ativo then null else v_func.id end
+   where id = p_aviso_id;
+
+  perform public.fn__auditar(
+    v_func.id, null,
+    case when p_ativo then 'AVISO_ALTERADO' else 'AVISO_DESATIVADO' end,
+    'AVISO', v_aviso.id::text,
+    jsonb_build_object('ativo', v_aviso.ativo), jsonb_build_object('ativo', p_ativo),
+    case when p_ativo then 'Aviso reativado por ' else 'Aviso desativado por ' end || v_func.nome);
+
+  return jsonb_build_object('ok', true, 'ativo', p_ativo);
+end $$;
+
+create or replace function public.fn_aviso_excluir(p_token uuid, p_aviso_id uuid)
+returns jsonb
+language plpgsql security definer set search_path = public, extensions as $$
+declare
+  v_func  public.funcionarios;
+  v_aviso public.avisos;
+begin
+  v_func := public.fn__sessao(p_token);
+  perform public.fn__exigir_admin(v_func);
+
+  select * into v_aviso from public.avisos where id = p_aviso_id;
+  if v_aviso.id is null then
+    raise exception 'AVISO_NAO_ENCONTRADO' using errcode = 'P0001';
+  end if;
+
+  perform public.fn__exigir_gestao(v_func, v_aviso.criado_por);
+
+  -- Os destinos caem junto por ON DELETE CASCADE. O aviso nao e historico de
+  -- operacao da PTA: e comunicado, e some quando deixa de servir.
+  perform public.fn__auditar(
+    v_func.id, null, 'AVISO_EXCLUIDO', 'AVISO', v_aviso.id::text,
+    jsonb_build_object('titulo', v_aviso.titulo, 'mensagem', v_aviso.mensagem),
+    null, 'Aviso excluido por ' || v_func.nome);
+
+  delete from public.avisos where id = p_aviso_id;
+
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- =============================================================================
+-- 21) LISTA "EM USO AGORA"
+--
+-- Junta as duas origens do que esta acontecendo neste instante:
+--   USO          uso real aberto pelo QR Code da PTA
+--   PROGRAMACAO  agendamento cujo horario esta correndo agora
+--
+-- Consulta livre, como o resto do calendario (decisao 4 de docs/DECISOES.md).
+-- =============================================================================
+create or replace function public.fn_em_uso_agora()
+returns jsonb
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare
+  v_lista jsonb;
+begin
+  select coalesce(jsonb_agg(x.item order by x.ordem, x.codigo), '[]'::jsonb)
+    into v_lista
+    from (
+      select 1 as ordem, p.codigo,
+             jsonb_build_object(
+               'origem', 'USO',
+               'id', u.id,
+               'pta', p.codigo,
+               'local', p.local,
+               'funcionario', f.nome,
+               'matricula', f.matricula,
+               'setor', s.nome,
+               'fornecedor', fo.nome,
+               'inicio', to_char(u.inicio_efetivo  at time zone public.fn_tz(), 'HH24:MI'),
+               'fim_previsto', to_char(u.fim_pretendido at time zone public.fn_tz(), 'HH24:MI'),
+               'atrasado', (u.fim_pretendido < now()),
+               'minutos_aberto', floor(extract(epoch from (now() - u.inicio_efetivo)) / 60)::int
+             ) as item
+        from public.usos u
+        join public.ptas p               on p.id = u.pta_id
+        join public.funcionarios f       on f.id = u.funcionario_id
+        join public.setores s            on s.id = f.setor_id
+        left join public.fornecedores fo on fo.id = u.fornecedor_id
+       where u.status = 'EM_USO'
+
+      union all
+
+      select 2 as ordem, p.codigo,
+             jsonb_build_object(
+               'origem', 'PROGRAMACAO',
+               'id', a.id,
+               'pta', p.codigo,
+               'local', p.local,
+               'funcionario', f.nome,
+               'matricula', f.matricula,
+               'setor', s.nome,
+               'fornecedor', fo.nome,
+               'inicio', to_char(a.inicio_planejado at time zone public.fn_tz(), 'HH24:MI'),
+               'fim_previsto', to_char(a.fim_planejado at time zone public.fn_tz(), 'HH24:MI'),
+               'atrasado', false,
+               'minutos_aberto', null
+             ) as item
+        from public.agendamentos a
+        join public.ptas p               on p.id = a.pta_id
+        join public.funcionarios f       on f.id = a.funcionario_id
+        join public.setores s            on s.id = f.setor_id
+        left join public.fornecedores fo on fo.id = a.fornecedor_id
+       where a.status = 'AGENDADO'
+         and now() >= a.inicio_planejado
+         and now() <  a.fim_planejado
+         -- Uso real na mesma PTA manda: nao lista a programacao em duplicidade.
+         and not exists (select 1 from public.usos u
+                          where u.pta_id = a.pta_id and u.status = 'EM_USO')
+    ) x;
+
+  return jsonb_build_object(
+    'agora', public.fn_agora(),
+    'itens', v_lista,
+    'total', jsonb_array_length(v_lista));
 end $$;
 
 -- =============================================================================
@@ -2162,7 +2887,8 @@ revoke all on function
   public.fn__exigir_admin(public.funcionarios),
   public.fn__exigir_master(public.funcionarios),
   public.fn__exigir_gestao(public.funcionarios, uuid),
-  public.fn__ciclico_gerar(uuid, date, uuid)
+  public.fn__ciclico_gerar(uuid, date, uuid),
+  public.fn__pta_codigo(text)
 from public, anon, authenticated;
 
 grant execute on function
@@ -2201,8 +2927,25 @@ grant execute on function
   public.fn_fornecedor_criar(uuid, text, text),
   public.fn_admin_cancelar_uso(uuid, uuid, text),
   public.fn_admin_definir_max_horas_uso(uuid, int),
-  public.fn_ciclico_criar(uuid, uuid, uuid, time, time, text, smallint[], int, date, date, uuid),
+  public.fn_ciclico_criar(uuid, uuid, uuid, time, time, text, smallint[], int, int, date, date, uuid),
   public.fn_ciclico_listar(uuid),
   public.fn_ciclico_desativar(uuid, uuid, boolean),
-  public.fn_ciclico_estender(uuid, uuid)
+  public.fn_ciclico_estender(uuid, uuid),
+  public.fn_perfil_trocar_pin(uuid, text, text),
+  public.fn_admin_resetar_pin(uuid, uuid, text),
+  public.fn_admin_listar_ptas(uuid),
+  public.fn_pta_criar(uuid, text, text, text),
+  public.fn_pta_alterar(uuid, uuid, text, text, text),
+  public.fn_pta_definir_ativo(uuid, uuid, boolean),
+  public.fn_pta_excluir(uuid, uuid),
+  public.fn_admin_reservadas(uuid),
+  public.fn_reservada_salvar(uuid, text, text, text),
+  public.fn_reservada_excluir(uuid, text),
+  public.fn_admin_definir_horizonte_ciclico(uuid, int),
+  public.fn_avisos_para_mim(uuid),
+  public.fn_aviso_criar(uuid, text, text, uuid[], uuid[], timestamptz, timestamptz),
+  public.fn_aviso_listar(uuid),
+  public.fn_aviso_definir_ativo(uuid, uuid, boolean),
+  public.fn_aviso_excluir(uuid, uuid),
+  public.fn_em_uso_agora()
 to anon, authenticated;

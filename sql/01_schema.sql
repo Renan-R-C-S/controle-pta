@@ -193,7 +193,11 @@ create table if not exists public.auditoria (
       'FUNCIONARIO_DESATIVADO', 'FUNCIONARIO_REATIVADO',
       'LIMITE_MATRICULAS_ALTERADO', 'CONFIGURACAO_ALTERADA',
       'FORNECEDOR_CRIADO',
-      'CICLICO_CRIADO', 'CICLICO_DESATIVADO', 'CICLICO_GERADO'))
+      'CICLICO_CRIADO', 'CICLICO_DESATIVADO', 'CICLICO_GERADO',
+      'PIN_ALTERADO', 'PIN_RESETADO',
+      'PTA_CRIADA', 'PTA_ALTERADA', 'PTA_DESATIVADA', 'PTA_REATIVADA', 'PTA_EXCLUIDA',
+      'RESERVADA_CRIADA', 'RESERVADA_ALTERADA', 'RESERVADA_EXCLUIDA',
+      'AVISO_CRIADO', 'AVISO_ALTERADO', 'AVISO_DESATIVADO', 'AVISO_EXCLUIDO'))
 );
 
 create index if not exists idx_auditoria_ocorrido on public.auditoria (ocorrido_em desc);
@@ -441,6 +445,131 @@ on conflict (chave) do nothing;
 -- =============================================================================
 -- NOVOS TIPOS DE ACAO AUDITAVEL
 -- =============================================================================
+-- =============================================================================
+-- MATRICULA REUTILIZAVEL APOS EXCLUSAO
+--
+-- Excluir um colaborador e uma desativacao: o cadastro fica no banco para que o
+-- historico continue fazendo sentido (quem usou a PTA em marco tem que continuar
+-- tendo nome em marco). Mas a matricula em si e um numero da empresa, que pode
+-- ser reaproveitado por outra pessoa depois.
+--
+-- Por isso a unicidade passa a valer apenas entre os ATIVOS: dois cadastros
+-- podem repetir a matricula desde que no maximo um deles esteja ativo.
+-- =============================================================================
+alter table public.funcionarios drop constraint if exists funcionarios_matricula_unica;
+
+create unique index if not exists uq_funcionario_matricula_ativa
+  on public.funcionarios (matricula) where ativo;
+
+-- =============================================================================
+-- PIN PROVISORIO (redefinicao de senha pela administracao)
+--
+-- Quando um administrador reseta o PIN de alguem, o novo PIN nasce marcado como
+-- provisorio. A pessoa entra com ele e e obrigada a trocar antes de seguir - o
+-- administrador nao deve continuar sabendo a senha de ninguem.
+-- =============================================================================
+alter table public.funcionarios
+  add column if not exists pin_provisorio  boolean not null default false,
+  add column if not exists pin_alterado_em timestamptz;
+
+-- =============================================================================
+-- PTAs GERENCIAVEIS PELA ADMINISTRACAO
+--
+-- PTA desabilitada some das telas de escolha, mas continua existindo para o
+-- historico. A exclusao de verdade so e permitida enquanto a PTA nunca foi
+-- usada nem agendada (ver fn_pta_excluir).
+-- =============================================================================
+alter table public.ptas
+  add column if not exists criado_por     uuid references public.funcionarios(id),
+  add column if not exists desativado_em  timestamptz,
+  add column if not exists desativado_por uuid references public.funcionarios(id);
+
+-- =============================================================================
+-- AGENDAMENTO CICLICO POR DIA DO MES
+--
+-- Terceiro formato de repeticao: "todo dia 5", "todo dia 28".
+--
+-- Dias 29, 30 e 31 nao existem em todo mes. A geracao PULA os meses em que a
+-- data nao existe, em vez de empurrar para o dia 1 do mes seguinte: quem pede
+-- "todo dia 31" quer o dia 31, e fevereiro simplesmente nao tem.
+-- =============================================================================
+alter table public.agendamentos_ciclicos
+  add column if not exists dia_do_mes smallint;
+
+alter table public.agendamentos_ciclicos drop constraint if exists ciclicos_tipo_valido;
+alter table public.agendamentos_ciclicos add constraint ciclicos_tipo_valido
+  check (tipo in ('DIAS_SEMANA', 'INTERVALO_DIAS', 'DIA_DO_MES'));
+
+alter table public.agendamentos_ciclicos drop constraint if exists ciclicos_parametro_coerente;
+alter table public.agendamentos_ciclicos add constraint ciclicos_parametro_coerente check (
+  (tipo = 'DIAS_SEMANA'    and dias_semana is not null and array_length(dias_semana, 1) between 1 and 7
+                           and intervalo_dias is null and dia_do_mes is null) or
+  (tipo = 'INTERVALO_DIAS' and intervalo_dias is not null and intervalo_dias between 1 and 365
+                           and dias_semana is null and dia_do_mes is null) or
+  (tipo = 'DIA_DO_MES'     and dia_do_mes is not null and dia_do_mes between 1 and 31
+                           and dias_semana is null and intervalo_dias is null));
+
+-- =============================================================================
+-- AVISOS (comunicados exibidos no login)
+--
+-- Um aviso pode ser geral, dirigido a setores, dirigido a pessoas especificas,
+-- ou uma combinacao. A regra de alcance e simples: sem nenhum destino
+-- cadastrado, o aviso vale para todo mundo; com destinos, vale para a uniao
+-- deles.
+--
+-- Nao existe registro de "ja li": o pedido e que o aviso apareca a cada login
+-- enquanto estiver ativo e dentro do prazo. Guardar leitura daria a falsa
+-- impressao de confirmacao de ciencia, que este sistema nao coleta.
+-- =============================================================================
+create table if not exists public.avisos (
+  id             uuid primary key default gen_random_uuid(),
+  titulo         text not null,
+  mensagem       text not null,
+  ativo          boolean not null default true,
+  inicio_em      timestamptz,          -- null = vale desde ja
+  fim_em         timestamptz,          -- null = prazo indefinido
+  criado_por     uuid not null references public.funcionarios(id) on delete restrict,
+  criado_em      timestamptz not null default now(),
+  atualizado_em  timestamptz not null default now(),
+  desativado_em  timestamptz,
+  desativado_por uuid references public.funcionarios(id),
+  constraint avisos_titulo_valido   check (char_length(btrim(titulo)) between 3 and 80),
+  constraint avisos_mensagem_valida check (char_length(btrim(mensagem)) between 3 and 600),
+  constraint avisos_prazo_valido    check (fim_em is null or inicio_em is null or fim_em > inicio_em)
+);
+
+create index if not exists idx_avisos_ativo on public.avisos (ativo, fim_em);
+
+-- Destino por setor: o aviso alcanca todo mundo do setor.
+create table if not exists public.avisos_setores (
+  aviso_id uuid not null references public.avisos(id) on delete cascade,
+  setor_id uuid not null references public.setores(id) on delete cascade,
+  primary key (aviso_id, setor_id)
+);
+
+-- Destino por pessoa: alcanca apenas quem foi escolhido.
+create table if not exists public.avisos_funcionarios (
+  aviso_id       uuid not null references public.avisos(id) on delete cascade,
+  funcionario_id uuid not null references public.funcionarios(id) on delete cascade,
+  primary key (aviso_id, funcionario_id)
+);
+
+-- =============================================================================
+-- CONFIGURACOES NOVAS
+-- =============================================================================
+
+-- Horizonte de geracao dos ciclicos: 1 ano por padrao, alteravel pelo
+-- administrador principal.
+insert into public.configuracao (chave, valor, descricao)
+values ('horizonte_ciclico_dias', '365',
+        'Ate quantos dias a frente as ocorrencias ciclicas sao geradas. Somente o ADMIN_MASTER altera.')
+on conflict (chave) do nothing;
+
+-- Instalacoes que ja tinham a chave com o valor antigo (90) sobem para 365.
+update public.configuracao
+   set valor = '365'
+ where chave = 'horizonte_ciclico_dias' and valor = '90';
+
 alter table public.auditoria drop constraint if exists auditoria_tipo_acao_valido;
 alter table public.auditoria add constraint auditoria_tipo_acao_valido check (tipo_acao in (
     'CADASTRO_USUARIO', 'LOGIN', 'LOGIN_FALHA', 'LOGOUT',
@@ -452,4 +581,8 @@ alter table public.auditoria add constraint auditoria_tipo_acao_valido check (ti
     'FUNCIONARIO_DESATIVADO', 'FUNCIONARIO_REATIVADO',
     'LIMITE_MATRICULAS_ALTERADO', 'CONFIGURACAO_ALTERADA',
     'FORNECEDOR_CRIADO',
-    'CICLICO_CRIADO', 'CICLICO_DESATIVADO', 'CICLICO_GERADO'));
+    'CICLICO_CRIADO', 'CICLICO_DESATIVADO', 'CICLICO_GERADO',
+    'PIN_ALTERADO', 'PIN_RESETADO',
+    'PTA_CRIADA', 'PTA_ALTERADA', 'PTA_DESATIVADA', 'PTA_REATIVADA', 'PTA_EXCLUIDA',
+    'RESERVADA_CRIADA', 'RESERVADA_ALTERADA', 'RESERVADA_EXCLUIDA',
+    'AVISO_CRIADO', 'AVISO_ALTERADO', 'AVISO_DESATIVADO', 'AVISO_EXCLUIDO'));

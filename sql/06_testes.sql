@@ -72,6 +72,17 @@ declare
   v_ag_master uuid;
   v_ciclico   uuid;
   v_ciclico2  uuid;
+  -- PIN, PTAs, reservadas, avisos e lista em uso
+  v_upin      uuid; v_tpin uuid;
+  v_ureuso    uuid;
+  v_setor2    uuid; v_tsetor2 uuid;
+  v_p904      uuid;
+  v_pta_nova  uuid;
+  v_ciclico3  uuid; v_ciclico4 uuid;
+  v_aviso     uuid; v_aviso2 uuid; v_aviso3 uuid;
+  v_int2      int;
+  v_ts        timestamptz;
+  v_hora_passada text;
 begin
   v_local   := now() at time zone public.fn_tz();
   v_ultima  := v_local::date + time '23:59';
@@ -88,6 +99,10 @@ begin
   insert into public.ptas (codigo, descricao) values ('PTA-901', 'Teste 1') returning id into v_p901;
   insert into public.ptas (codigo, descricao) values ('PTA-902', 'Teste 2') returning id into v_p902;
   insert into public.ptas (codigo, descricao) values ('PTA-903', 'Teste 3') returning id into v_p903;
+  insert into public.ptas (codigo, descricao) values ('PTA-904', 'Teste 4') returning id into v_p904;
+
+  -- Segundo setor, para provar que um aviso dirigido nao vaza para fora dele
+  insert into public.setores (nome, ordem) values ('TESTE_SETOR_2', 98) returning id into v_setor2;
 
   v_rel := v_rel || E'===========================================================\n';
   v_rel := v_rel || E' RELATORIO DE TESTES - CONTROLE DE PTA\n';
@@ -153,7 +168,7 @@ begin
   if v_erro is null and (v_r->>'ok')::boolean and (v_r->>'token') is not null then
     v_ta := (v_r->>'token')::uuid;
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T07 login incorreto
   v_desc := 'T07 login com PIN incorreto e recusado'; v_erro := null;
@@ -162,7 +177,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and (v_r->>'ok')::boolean is false and v_r->>'erro' = 'PIN_INCORRETO' then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T08 bloqueio apos 5 tentativas (item 8)
   v_desc := 'T08 conta bloqueia apos 5 tentativas invalidas'; v_erro := null;
@@ -170,7 +185,7 @@ begin
     begin v_r := public.fn_login(v_uc, '0000'); exception when others then v_erro := sqlerrm; end;
   end loop;
   if v_r->>'erro' = 'CONTA_BLOQUEADA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T09 contador de tentativas foi realmente persistido
   v_desc := 'T09 tentativas invalidas ficam gravadas (nao sofrem rollback)';
@@ -204,7 +219,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and v_r->>'status' = 'DISPONIVEL' and v_r->'pta'->>'codigo' = 'PTA-901' then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T13 horario final anterior ao inicial (item 12)
   v_desc := 'T13 fim pretendido no passado e recusado'; v_erro := null;
@@ -278,7 +293,7 @@ begin
     into v_bool from public.usos where id = v_uso_a;
   if v_erro is null and v_bool and (v_r->>'ultrapassou_previsto')::boolean is false then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T22 nao permite finalizar duas vezes
   v_desc := 'T22 uso ja finalizado nao finaliza de novo'; v_erro := null;
@@ -318,7 +333,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and (v_r->>'ultrapassou_previsto')::boolean then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T26 o horario pretendido nao foi sobrescrito pelo efetivo (REGRA 11)
   v_desc := 'T26 fim_pretendido e fim_efetivo permanecem distintos';
@@ -398,7 +413,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and (v_r->>'agendamentos_afetados')::int = 1 then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T34 o agendamento anterior NAO foi apagado (REGRA 18)
   v_desc := 'T34 agendamento anterior preservado e marcado como afetado';
@@ -497,7 +512,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   select papel into v_txt from public.funcionarios where id = v_ub;
   if v_erro is null and v_txt = 'ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
 
   -- T44 ADMIN comum NAO revoga (privilegio exclusivo do master)
   v_desc := 'T44 ADMIN comum nao consegue revogar papel de ADMIN'; v_erro := null;
@@ -512,7 +527,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   select papel into v_txt from public.funcionarios where id = v_ub;
   if v_erro is null and v_txt = 'FUNCIONARIO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
 
   -- T46 o ADMIN_MASTER e intocavel
   v_desc := 'T46 papel do ADMIN_MASTER nao pode ser alterado'; v_erro := null;
@@ -543,7 +558,7 @@ begin
   select to_char(inicio_planejado at time zone public.fn_tz(), 'HH24:MI') into v_txt
     from public.agendamentos where id = v_ag_alvo;
   if v_erro is null and v_txt = '06:30' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
 
   -- T49 funcionario comum NAO altera programacao alheia
   v_desc := 'T49 funcionario comum nao altera programacao alheia'; v_erro := null;
@@ -569,7 +584,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   select status into v_txt from public.agendamentos where id = v_ag_alvo;
   if v_erro is null and v_txt = 'CANCELADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
 
   -- T52 a programacao cancelada continua existindo (REGRA 18)
   v_desc := 'T52 programacao "excluida" pelo admin continua no historico';
@@ -605,7 +620,7 @@ begin
   select ativo into v_bool from public.funcionarios where id = v_ualvo;
   if v_erro is null and v_bool is false and (v_r->>'agendamentos_cancelados')::int = 1 then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T56 o historico do desativado permanece
   v_desc := 'T56 historico do funcionario desativado e preservado';
@@ -624,7 +639,7 @@ begin
   begin v_r := public.fn_login(v_ualvo, '4444');
   exception when others then v_erro := sqlerrm; end;
   if v_erro = 'FUNCIONARIO_NAO_ENCONTRADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T59 reativar devolve o acesso
   v_desc := 'T59 administrador consegue reativar um funcionario'; v_erro := null;
@@ -679,7 +694,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   select nome into v_txt from public.funcionarios where id = v_ua;
   if v_erro is null and v_txt = 'Teste Alfa Renomeado' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
 
   -- T65 a matricula NAO muda junto
   v_desc := 'T65 alterar o nome nao altera a matricula';
@@ -723,7 +738,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and v_forn is not null and (v_r->>'ja_existia')::boolean is false then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T70 nome repetido nao duplica cadastro
   v_desc := 'T70 terceiro com mesmo nome nao vira cadastro duplicado'; v_erro := null;
@@ -731,7 +746,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and (v_r->>'ja_existia')::boolean and (v_r->>'id')::uuid = v_forn then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T71 busca por trecho do nome
   v_desc := 'T71 busca de terceiro por trecho do nome';
@@ -766,7 +781,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   select status into v_txt from public.usos where id = v_uso_c;
   if v_erro is null and v_txt = 'CANCELADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
 
   -- T75 uso cancelado NAO ganha fim_efetivo inventado
   v_desc := 'T75 uso cancelado fica sem fim efetivo';
@@ -926,7 +941,7 @@ begin
   exception when others then v_erro := sqlerrm; end;
   if v_erro is null and (v_r->>'criados')::int = 0 and (v_r->>'pulados')::int > 0 then
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || (v_r->>'pulados') || ' pulados)' || E'\n';
-  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text) || E'\n'; end if;
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
 
   -- T91 desativar a regra cancela as ocorrencias futuras
   v_desc := 'T91 desativar regra ciclica cancela as ocorrencias futuras'; v_erro := null;
@@ -979,7 +994,7 @@ begin
       v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
     else
       v_falha := v_falha + 1;
-      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n';
     end if;
   end if;
 
@@ -998,7 +1013,7 @@ begin
       v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
     else
       v_falha := v_falha + 1;
-      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n';
     end if;
   end if;
 
@@ -1017,7 +1032,7 @@ begin
       v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
     else
       v_falha := v_falha + 1;
-      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n';
     end if;
   end if;
 
@@ -1034,7 +1049,7 @@ begin
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else
     v_falha := v_falha + 1;
-    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n';
   end if;
 
   -- T98 exatamente 4 digitos passa intacta
@@ -1048,7 +1063,7 @@ begin
     v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else
     v_falha := v_falha + 1;
-    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt) || E'\n';
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n';
   end if;
 
   -- T99 depois de normalizar, a duplicidade continua sendo barrada.
@@ -1096,6 +1111,491 @@ begin
     v_falha := v_falha + 1;
     v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, 'aceitou!') || E'\n';
   end if;
+
+  v_rel := v_rel || E'\n-- PIN, PTAs, RESERVADAS, AVISOS E LISTA EM USO -----\n';
+
+  -- ===========================================================================
+  -- PIN DE 4 A 10 DIGITOS E REDEFINICAO
+  -- ===========================================================================
+
+  -- T103 PIN longo e aceito no cadastro
+  v_desc := 'T103 cadastro aceita PIN de 8 digitos'; v_erro := null;
+  begin
+    v_r := public.fn_cadastrar_funcionario('Teste Pin Longo', '900801', '12345678', v_setor);
+    v_upin := (v_r->'funcionario'->>'id')::uuid;
+    v_tpin := (v_r->>'token')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_upin is not null then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'?') || E'\n'; end if;
+
+  -- T104 login com o PIN longo funciona
+  v_desc := 'T104 login com PIN de 8 digitos'; v_erro := null;
+  begin v_r := public.fn_login(v_upin, '12345678');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'ok')::boolean then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
+
+  -- T105 PIN de 3 digitos continua recusado
+  v_desc := 'T105 PIN de 3 digitos continua recusado'; v_erro := null;
+  begin perform public.fn_cadastrar_funcionario('Teste Pin Curto', '900802', '123', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PIN_FORMATO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'aceitou!') || E'\n'; end if;
+
+  -- T106 acima de 10 digitos e recusado
+  v_desc := 'T106 PIN de 11 digitos e recusado'; v_erro := null;
+  begin perform public.fn_cadastrar_funcionario('Teste Pin Enorme', '900803', '12345678901', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PIN_FORMATO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'aceitou!') || E'\n'; end if;
+
+  -- T107 troca do proprio PIN exige o PIN atual correto
+  v_desc := 'T107 troca de PIN com PIN atual errado e recusada'; v_erro := null;
+  begin perform public.fn_perfil_trocar_pin(v_tpin, '00000000', '4321');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PIN_ATUAL_INCORRETO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'trocou!') || E'\n'; end if;
+
+  -- T108 troca valida, e o PIN novo passa a valer
+  v_desc := 'T108 colaborador troca o proprio PIN'; v_erro := null;
+  begin
+    perform public.fn_perfil_trocar_pin(v_tpin, '12345678', '4321');
+    v_r := public.fn_login(v_upin, '4321');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'ok')::boolean then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
+
+  -- T109 o PIN antigo deixa de funcionar
+  v_desc := 'T109 o PIN antigo para de funcionar apos a troca';
+  v_r := public.fn_login(v_upin, '12345678');
+  if (v_r->>'ok')::boolean is not true then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || E'\n'; end if;
+
+  -- T110 administrador reseta o PIN, e ele nasce provisorio
+  v_desc := 'T110 PIN resetado pela administracao nasce provisorio'; v_erro := null;
+  begin
+    perform public.fn_admin_resetar_pin(v_tadm, v_upin, '9999');
+    v_r := public.fn_login(v_upin, '9999');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->'funcionario'->>'pin_provisorio')::boolean then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
+
+  -- T111 trocar o provisorio limpa a marca
+  v_desc := 'T111 trocar o PIN provisorio limpa a marca'; v_erro := null;
+  begin
+    perform public.fn_perfil_trocar_pin((v_r->>'token')::uuid, '9999', '5678');
+    v_r := public.fn_login(v_upin, '5678');
+    -- O reset do T110 encerrou as sessoes do alvo: o token antigo morreu ali.
+    v_tpin := (v_r->>'token')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->'funcionario'->>'pin_provisorio')::boolean is false then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
+
+  -- T112 funcionario comum nao reseta PIN de ninguem
+  v_desc := 'T112 colaborador comum nao reseta PIN de outro'; v_erro := null;
+  begin perform public.fn_admin_resetar_pin(v_ta, v_ub, '1111');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'resetou!') || E'\n'; end if;
+
+  -- T113 ADMIN comum nao reseta o PIN do ADMIN_MASTER
+  v_desc := 'T113 ADMIN comum nao reseta o PIN do ADMIN_MASTER'; v_erro := null;
+  begin perform public.fn_admin_resetar_pin(v_tadm, v_um, '1111');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'ADMIN_MASTER_PROTEGIDO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'resetou!') || E'\n'; end if;
+
+  -- ===========================================================================
+  -- MATRICULA REUTILIZAVEL APOS EXCLUSAO
+  -- ===========================================================================
+
+  -- T114 matricula de quem foi excluido pode ser reaproveitada
+  v_desc := 'T114 matricula liberada apos exclusao pode ser reusada'; v_erro := null;
+  begin
+    v_r := public.fn_cadastrar_funcionario('Teste Reuso Um', '900901', '1234', v_setor);
+    v_ureuso := (v_r->'funcionario'->>'id')::uuid;
+    perform public.fn_admin_desativar_funcionario(v_tm, v_ureuso);
+    v_r := public.fn_cadastrar_funcionario('Teste Reuso Dois', '900901', '4321', v_setor);
+    v_uuid := (v_r->'funcionario'->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_uuid is not null and v_uuid <> v_ureuso then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'?') || E'\n'; end if;
+
+  -- T115 duas pessoas ATIVAS com a mesma matricula continuam impossiveis
+  v_desc := 'T115 matricula duplicada entre ativos continua barrada'; v_erro := null;
+  begin perform public.fn_cadastrar_funcionario('Teste Reuso Tres', '900901', '5555', v_setor);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'MATRICULA_DUPLICADA' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'aceitou!') || E'\n'; end if;
+
+  -- T116 o cadastro antigo continua no banco, com o historico dele
+  v_desc := 'T116 cadastro excluido permanece para o historico';
+  select count(*) into v_int from public.funcionarios where matricula = '900901';
+  if v_int = 2 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' cadastros' || E'\n'; end if;
+
+  -- ===========================================================================
+  -- VIRADA DA MEIA-NOITE (item 10)
+  -- ===========================================================================
+
+  -- T117 horario ja passado hoje e entendido como madrugada de amanha.
+  -- So faz sentido testar quando o horario escolhido REALMENTE ja passou hoje,
+  -- entao o teste usa uma hora atras.
+  v_desc := 'T117 horario anterior ao atual vira o dia seguinte'; v_erro := null;
+  v_hora_passada := to_char((now() at time zone public.fn_tz()) - interval '1 hour', 'HH24:MI');
+  if v_hora_passada > '01:00' then
+    begin
+      -- limite alto para o teste nao esbarrar em DURACAO_EXCESSIVA
+      perform public.fn_admin_definir_max_horas_uso(v_tadm, 24);
+      v_r := public.fn_uso_iniciar(v_tpin, 'PTA-904', v_hora_passada);
+      select fim_pretendido into v_ts from public.usos where id = (v_r->>'uso_id')::uuid;
+    exception when others then v_erro := sqlerrm; end;
+    if v_erro is null and v_ts > now() then
+      v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_hora_passada || ' -> amanha)' || E'\n';
+    else
+      v_falha := v_falha + 1;
+      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_ts::text, '(nulo)') || E'\n';
+    end if;
+    perform public.fn_admin_definir_max_horas_uso(v_tadm, 14);
+  else
+    v_ok := v_ok + 1;
+    v_rel := v_rel || '  [OK]    ' || v_desc || ' (pulado: madrugada, sem hora anterior no mesmo dia)' || E'\n';
+  end if;
+
+  -- ===========================================================================
+  -- PTAs GERENCIADAS PELA ADMINISTRACAO
+  -- ===========================================================================
+
+  -- T118 administrador cria PTA, aceitando o codigo so com numeros
+  v_desc := 'T118 administrador cria PTA informando apenas o numero'; v_erro := null;
+  begin
+    v_r := public.fn_pta_criar(v_tadm, '917', 'PTA de teste', 'Galpao X');
+    v_pta_nova := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'codigo') = 'PTA-917' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
+
+  -- T119 colaborador comum nao cria PTA
+  v_desc := 'T119 colaborador comum nao cria PTA'; v_erro := null;
+  begin perform public.fn_pta_criar(v_ta, '918', null, null);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'criou!') || E'\n'; end if;
+
+  -- T120 codigo repetido e recusado
+  v_desc := 'T120 PTA com codigo repetido e recusada'; v_erro := null;
+  begin perform public.fn_pta_criar(v_tadm, 'PTA-917', null, null);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PTA_CODIGO_DUPLICADO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'criou!') || E'\n'; end if;
+
+  -- T121 editar o nome/descricao da PTA
+  v_desc := 'T121 administrador edita a descricao da PTA'; v_erro := null;
+  begin perform public.fn_pta_alterar(v_tadm, v_pta_nova, 'PTA-917', 'Plataforma revisada', 'Galpao Y');
+  exception when others then v_erro := sqlerrm; end;
+  select descricao into v_txt from public.ptas where id = v_pta_nova;
+  if v_erro is null and v_txt = 'Plataforma revisada' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
+
+  -- T122 PTA desabilitada some da lista publica
+  v_desc := 'T122 PTA desabilitada nao aparece para escolha'; v_erro := null;
+  begin perform public.fn_pta_definir_ativo(v_tadm, v_pta_nova, false);
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int from public.fn_ptas() where codigo = 'PTA-917';
+  if v_erro is null and v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T123 e volta ao ser reabilitada
+  v_desc := 'T123 PTA reabilitada volta a aparecer'; v_erro := null;
+  begin perform public.fn_pta_definir_ativo(v_tadm, v_pta_nova, true);
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int from public.fn_ptas() where codigo = 'PTA-917';
+  if v_erro is null and v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T124 PTA sem historico pode ser excluida de verdade
+  v_desc := 'T124 PTA sem historico pode ser excluida'; v_erro := null;
+  begin perform public.fn_pta_excluir(v_tadm, v_pta_nova);
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int from public.ptas where id = v_pta_nova;
+  if v_erro is null and v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T125 PTA COM historico nao pode ser apagada: destruiria o passado
+  v_desc := 'T125 PTA com historico nao pode ser excluida'; v_erro := null;
+  begin perform public.fn_pta_excluir(v_tadm, v_p901);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'PTA_COM_HISTORICO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'excluiu!') || E'\n'; end if;
+
+  -- ===========================================================================
+  -- MATRICULAS RESERVADAS
+  -- ===========================================================================
+
+  -- T126 somente o ADMIN_MASTER mexe nas reservas
+  v_desc := 'T126 ADMIN comum nao altera matriculas reservadas'; v_erro := null;
+  begin perform public.fn_reservada_salvar(v_tadm, '0777', 'ADMIN', 'teste');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SOMENTE_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'alterou!') || E'\n'; end if;
+
+  -- T127 o master cria uma reserva, e a matricula curta e normalizada
+  v_desc := 'T127 reserva criada com matricula curta vira 4 digitos'; v_erro := null;
+  begin v_r := public.fn_reservada_salvar(v_tm, '777', 'ADMIN', 'Reserva de teste');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and (v_r->>'matricula') = '0777'
+     and exists (select 1 from public.matriculas_reservadas where matricula = '0777') then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_r::text, '(nulo)') || E'\n'; end if;
+
+  -- T128 salvar de novo atualiza em vez de duplicar
+  v_desc := 'T128 salvar a mesma reserva atualiza o papel'; v_erro := null;
+  begin perform public.fn_reservada_salvar(v_tm, '0777', 'ADMIN_MASTER', 'Promovida');
+  exception when others then v_erro := sqlerrm; end;
+  select papel into v_txt from public.matriculas_reservadas where matricula = '0777';
+  select count(*) into v_int from public.matriculas_reservadas where matricula = '0777';
+  if v_erro is null and v_txt = 'ADMIN_MASTER' and v_int = 1 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
+
+  -- T129 a reserva realmente concede o papel no cadastro
+  v_desc := 'T129 quem cadastra a matricula reservada assume o papel'; v_erro := null;
+  if exists (select 1 from public.funcionarios where matricula = '0777' and ativo) then
+    v_ok := v_ok + 1;
+    v_rel := v_rel || '  [OK]    ' || v_desc || ' (pulado: 0777 ja cadastrada)' || CHR(10);
+  else
+  begin
+    v_r := public.fn_cadastrar_funcionario('Teste Reservado', '777', '1234', v_setor);
+    v_txt := v_r->'funcionario'->>'papel';
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_txt = 'ADMIN_MASTER' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_txt, '(nulo)') || E'\n'; end if;
+
+  end if;
+
+  -- T130 excluir a reserva
+  v_desc := 'T130 master exclui uma matricula reservada'; v_erro := null;
+  begin perform public.fn_reservada_excluir(v_tm, '0777');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and not exists (select 1 from public.matriculas_reservadas where matricula = '0777') then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'ficou') || E'\n'; end if;
+
+  -- ===========================================================================
+  -- CICLICO POR DIA DO MES E HORIZONTE
+  -- ===========================================================================
+
+  -- T131 regra "todo dia N" gera as ocorrencias
+  v_desc := 'T131 ciclico por dia do mes gera ocorrencias'; v_erro := null;
+  begin
+    v_r := public.fn_ciclico_criar(v_tadm, v_p903, v_ub, '04:00', '05:00', 'DIA_DO_MES',
+                                   null, null, 15, null, null, null);
+    v_ciclico3 := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int from public.agendamentos where ciclico_id = v_ciclico3;
+  -- 365 dias => 12 ocorrencias, menos a do mes corrente se o dia 15 ja passou
+  if v_erro is null and v_int between 11 and 12 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' ocorrencias)' || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T132 todas caem exatamente no dia escolhido
+  v_desc := 'T132 ocorrencias caem sempre no dia do mes escolhido';
+  select count(*) into v_int from public.agendamentos
+   where ciclico_id = v_ciclico3 and extract(day from data_ref)::smallint <> 15;
+  if v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || ' fora do dia' || E'\n'; end if;
+
+  -- T133 dia 31 pula os meses que nao tem dia 31, em vez de cair no dia 1
+  v_desc := 'T133 regra no dia 31 pula os meses mais curtos'; v_erro := null;
+  begin
+    v_r := public.fn_ciclico_criar(v_tadm, v_p902, v_ub, '04:00', '05:00', 'DIA_DO_MES',
+                                   null, null, 31, null, null, null);
+    v_ciclico4 := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int from public.agendamentos
+   where ciclico_id = v_ciclico4 and extract(day from data_ref)::smallint <> 31;
+  select count(*) into v_int2 from public.agendamentos where ciclico_id = v_ciclico4;
+  -- 7 meses do ano tem dia 31
+  if v_erro is null and v_int = 0 and v_int2 between 6 and 7 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int2 || ' ocorrencias)' || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int2::text) || E'\n'; end if;
+
+  -- T134 dia do mes invalido e recusado
+  v_desc := 'T134 dia do mes fora de 1..31 e recusado'; v_erro := null;
+  begin perform public.fn_ciclico_criar(v_tadm, v_p903, v_ub, '04:00', '05:00', 'DIA_DO_MES',
+                                        null, null, 32, null, null, null);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'CICLO_DIA_DO_MES_INVALIDO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'criou!') || E'\n'; end if;
+
+  -- T135 somente o master altera o horizonte
+  v_desc := 'T135 ADMIN comum nao altera o horizonte dos ciclicos'; v_erro := null;
+  begin perform public.fn_admin_definir_horizonte_ciclico(v_tadm, 180);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SOMENTE_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'alterou!') || E'\n'; end if;
+
+  -- T136 o master altera, e o padrao de fabrica e 1 ano
+  v_desc := 'T136 horizonte padrao e de 365 dias e o master altera'; v_erro := null;
+  select valor into v_txt from public.configuracao where chave = 'horizonte_ciclico_dias';
+  begin perform public.fn_admin_definir_horizonte_ciclico(v_tm, 180);
+  exception when others then v_erro := sqlerrm; end;
+  select valor into v_txt2 from public.configuracao where chave = 'horizonte_ciclico_dias';
+  if v_erro is null and v_txt = '365' and v_txt2 = '180' then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> antes=' || coalesce(v_txt,'?') || ' depois=' || coalesce(v_txt2,'?') || E'\n'; end if;
+  perform public.fn_admin_definir_horizonte_ciclico(v_tm, 365);
+
+  -- ===========================================================================
+  -- AVISOS
+  -- ===========================================================================
+
+  -- T137 aviso geral alcanca qualquer pessoa
+  v_desc := 'T137 aviso sem destino alcanca todo mundo'; v_erro := null;
+  begin
+    v_r := public.fn_aviso_criar(v_tadm, 'Parada geral', 'Manutencao da rede eletrica no sabado.',
+                                 null, null, null, null);
+    v_aviso := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int
+    from jsonb_array_elements(public.fn_avisos_para_mim(v_ta)) e
+   where (e->>'id')::uuid = v_aviso;
+  if v_erro is null and v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- Pessoa do segundo setor, para provar os dois lados do direcionamento
+  v_r := public.fn_cadastrar_funcionario('Teste Setor Dois', '900902', '1234', v_setor2);
+  v_tsetor2 := (v_r->>'token')::uuid;
+
+  -- T138 aviso dirigido a um setor NAO alcanca quem esta fora dele
+  v_desc := 'T138 aviso de outro setor nao alcanca a pessoa'; v_erro := null;
+  begin
+    v_r := public.fn_aviso_criar(v_tadm, 'Somente eletrica', 'Treinamento NR10 na quinta.',
+                                 array[v_setor2]::uuid[], null, null, null);
+    v_aviso2 := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int
+    from jsonb_array_elements(public.fn_avisos_para_mim(v_ta)) e
+   where (e->>'id')::uuid = v_aviso2;
+  if v_erro is null and v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T139 e alcanca quem esta no setor escolhido
+  v_desc := 'T139 aviso de setor alcanca quem pertence a ele';
+  select count(*) into v_int
+    from jsonb_array_elements(public.fn_avisos_para_mim(v_tsetor2)) e
+   where (e->>'id')::uuid = v_aviso2;
+  if v_int = 1 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || v_int || E'\n'; end if;
+
+  -- T140 aviso dirigido a uma pessoa especifica
+  v_desc := 'T140 aviso dirigido a uma pessoa alcanca so ela'; v_erro := null;
+  begin
+    v_r := public.fn_aviso_criar(v_tadm, 'Recado pessoal', 'Procure a seguranca do trabalho.',
+                                 null, array[v_ub]::uuid[], null, null);
+    v_aviso3 := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int
+    from jsonb_array_elements(public.fn_avisos_para_mim(v_tb)) e where (e->>'id')::uuid = v_aviso3;
+  select count(*) into v_int2
+    from jsonb_array_elements(public.fn_avisos_para_mim(v_ta)) e where (e->>'id')::uuid = v_aviso3;
+  if v_erro is null and v_int = 1 and v_int2 = 0 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> destinatario=' || v_int || ' outro=' || v_int2 || E'\n'; end if;
+
+  -- T141 aviso desativado some
+  v_desc := 'T141 aviso desativado deixa de aparecer'; v_erro := null;
+  begin perform public.fn_aviso_definir_ativo(v_tadm, v_aviso, false);
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int
+    from jsonb_array_elements(public.fn_avisos_para_mim(v_ta)) e where (e->>'id')::uuid = v_aviso;
+  if v_erro is null and v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T142 aviso com prazo vencido nao aparece
+  v_desc := 'T142 aviso com prazo vencido nao aparece'; v_erro := null;
+  begin
+    v_r := public.fn_aviso_criar(v_tadm, 'Aviso vencido', 'Isto ja passou.',
+                                 null, null, now() - interval '2 days', now() - interval '1 day');
+    v_uuid := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int
+    from jsonb_array_elements(public.fn_avisos_para_mim(v_ta)) e where (e->>'id')::uuid = v_uuid;
+  if v_erro is null and v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T143 aviso agendado para o futuro ainda nao aparece
+  v_desc := 'T143 aviso com inicio futuro ainda nao aparece'; v_erro := null;
+  begin
+    v_r := public.fn_aviso_criar(v_tadm, 'Aviso futuro', 'Comeca semana que vem.',
+                                 null, null, now() + interval '3 days', null);
+    v_uuid := (v_r->>'id')::uuid;
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int
+    from jsonb_array_elements(public.fn_avisos_para_mim(v_ta)) e where (e->>'id')::uuid = v_uuid;
+  if v_erro is null and v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T144 colaborador comum nao cria aviso
+  v_desc := 'T144 colaborador comum nao cria aviso'; v_erro := null;
+  begin perform public.fn_aviso_criar(v_ta, 'Nao pode', 'Mensagem qualquer.', null, null, null, null);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'SEM_PERMISSAO_ADMIN' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'criou!') || E'\n'; end if;
+
+  -- T145 prazo final anterior ao inicial e recusado
+  v_desc := 'T145 prazo final anterior ao inicial e recusado'; v_erro := null;
+  begin perform public.fn_aviso_criar(v_tadm, 'Prazo torto', 'Mensagem.', null, null,
+                                      now() + interval '5 days', now() + interval '1 day');
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'AVISO_PRAZO_INVALIDO' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'criou!') || E'\n'; end if;
+
+  -- T146 aviso do master so o master mexe
+  v_desc := 'T146 aviso criado pelo master so o master desativa'; v_erro := null;
+  v_r := public.fn_aviso_criar(v_tm, 'Do master', 'Comunicado da diretoria.', null, null, null, null);
+  begin perform public.fn_aviso_definir_ativo(v_tadm, (v_r->>'id')::uuid, false);
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro = 'REGISTRO_DO_ADMIN_MASTER' then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro,'desativou!') || E'\n'; end if;
+
+  -- ===========================================================================
+  -- LISTA "EM USO AGORA"
+  -- ===========================================================================
+
+  -- T147 uso aberto aparece na lista
+  v_desc := 'T147 uso em andamento aparece na lista Em Uso'; v_erro := null;
+  begin v_r := public.fn_em_uso_agora();
+  exception when others then v_erro := sqlerrm; end;
+  select count(*) into v_int
+    from jsonb_array_elements(v_r->'itens') e where e->>'origem' = 'USO';
+  if v_erro is null and v_int > 0 then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || ' (' || v_int || ' em uso)' || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> ' || coalesce(v_erro, v_int::text) || E'\n'; end if;
+
+  -- T148 a lista traz o total coerente com os itens
+  v_desc := 'T148 total da lista bate com a quantidade de itens';
+  v_r := public.fn_em_uso_agora();
+  if (v_r->>'total')::int = jsonb_array_length(v_r->'itens') then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || E'\n'; end if;
+
+  -- T149 uso finalizado nao aparece mais
+  v_desc := 'T149 uso finalizado sai da lista Em Uso';
+  select count(*) into v_int
+    from jsonb_array_elements(public.fn_em_uso_agora()->'itens') e
+   where (e->>'id')::uuid = v_uso_a;
+  if v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
+  else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || E'\n'; end if;
 
   -- ===========================================================================
   -- RELATORIO
