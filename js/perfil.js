@@ -15,7 +15,7 @@
 import { rpc } from './api.js';
 import { tokenAtual } from './auth.js';
 import { ErroApp } from './erros.js';
-import { nomeValido } from './validacoes.js';
+import { nomeValido, pinValido } from './validacoes.js';
 
 export async function alterarNome(nome) {
   if (!nomeValido(nome)) throw new ErroApp('NOME_INVALIDO');
@@ -23,5 +23,21 @@ export async function alterarNome(nome) {
   return rpc('fn_perfil_alterar_nome', {
     p_token: tokenAtual(),
     p_nome: nome.trim(),
+  });
+}
+
+/**
+ * Troca do proprio PIN.
+ * Exige o PIN atual: sem isso, uma sessao esquecida aberta no celular deixaria
+ * qualquer um trocar a senha do dono.
+ */
+export async function trocarPin({ atual, novo, confirmacao }) {
+  if (!pinValido(novo)) throw new ErroApp('PIN_FORMATO');
+  if (novo !== confirmacao) throw new ErroApp('PIN_DIFERENTE');
+
+  return rpc('fn_perfil_trocar_pin', {
+    p_token: tokenAtual(),
+    p_pin_atual: atual,
+    p_pin_novo: novo,
   });
 }

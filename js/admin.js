@@ -109,3 +109,34 @@ export async function definirLimiteMatriculas(limite) {
     p_limite: limite,
   });
 }
+
+/* -------------------------------------------------------------------------- */
+/* Matriculas reservadas e horizonte dos ciclicos (ADMIN_MASTER)               */
+/* -------------------------------------------------------------------------- */
+
+export async function listarReservadas() {
+  return rpc('fn_admin_reservadas', { p_token: tokenAtual() });
+}
+
+/** Cria ou atualiza. A matricula curta e normalizada ('591' -> '0591'). */
+export async function salvarReservada({ matricula, papel, observacao }) {
+  return rpc('fn_reservada_salvar', {
+    p_token: tokenAtual(),
+    p_matricula: matricula,
+    p_papel: papel,
+    p_observacao: observacao?.trim() || null,
+  });
+}
+
+/**
+ * Remove a reserva. NAO rebaixa quem ja se cadastrou com ela: o papel de uma
+ * pessoa se muda pela tela de papeis, nao por efeito colateral.
+ */
+export async function excluirReservada(matricula) {
+  return rpc('fn_reservada_excluir', { p_token: tokenAtual(), p_matricula: matricula });
+}
+
+/** Ate quantos dias a frente as ocorrencias ciclicas sao geradas (7 a 1095). */
+export async function definirHorizonteCiclico(dias) {
+  return rpc('fn_admin_definir_horizonte_ciclico', { p_token: tokenAtual(), p_dias: dias });
+}

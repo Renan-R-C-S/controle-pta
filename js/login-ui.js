@@ -13,7 +13,6 @@
  */
 
 import { cadastrar, entrar, listarFuncionarios, listarSetores, matriculaDisponivel } from './auth.js';
-import { APP } from './config.js';
 import { avisar, comCarregamento, criar, preencher, tratarErro } from './ui.js';
 import { matriculaValida, nomeValido, normalizarMatricula, pinValido } from './validacoes.js';
 
@@ -174,9 +173,9 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
       inputmode: 'numeric',
       pattern: '[0-9]*',
       autocomplete: 'off',
-      maxlength: String(APP.digitosPin),
+      maxlength: '10',
       placeholder: '••••',
-      'aria-label': 'PIN de 4 digitos',
+      'aria-label': 'PIN de 4 a 10 digitos',
       'data-foco': 'true',
     });
 
@@ -198,18 +197,20 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
       }),
     ]);
 
-    // So aceita digitos; envia sozinho ao completar os 4 (item 37).
+    // So aceita digitos.
+    //
+    // O envio automatico ao completar 4 digitos saiu quando o PIN passou a ter
+    // de 4 a 10: nao ha como saber que a pessoa terminou de digitar, e quem
+    // tivesse PIN de 6 jamais conseguiria digitar o quinto. Fica o botao
+    // ENTRAR, que ja e grande o bastante para uso com luva.
     campo.addEventListener('input', () => {
-      campo.value = campo.value.replace(/\D/g, '').slice(0, APP.digitosPin);
-      if (campo.value.length === APP.digitosPin) {
-        formulario.requestSubmit();
-      }
+      campo.value = campo.value.replace(/\D/g, '').slice(0, 10);
     });
 
     formulario.addEventListener('submit', async (evento) => {
       evento.preventDefault();
       if (!pinValido(campo.value)) {
-        avisar('O PIN deve ter exatamente 4 digitos.', 'erro');
+        avisar('O PIN deve ter de 4 a 10 digitos.', 'erro');
         return;
       }
       try {
@@ -255,17 +256,17 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
     });
     const pin = campoTexto({
       id: 'cad-pin',
-      rotulo: 'PIN de 4 digitos',
+      rotulo: 'PIN (4 a 10 digitos)',
       type: 'password',
       inputmode: 'numeric',
-      maxlength: '4',
+      maxlength: '10',
     });
     const confirmacao = campoTexto({
       id: 'cad-pin2',
       rotulo: 'Confirme o PIN',
       type: 'password',
       inputmode: 'numeric',
-      maxlength: '4',
+      maxlength: '10',
     });
 
     for (const campo of [matricula.input, pin.input, confirmacao.input]) {
@@ -320,7 +321,7 @@ export function criarFluxoLogin(container, { aoEntrar, subtitulo } = {}) {
       // Feedback imediato; a validacao que vale e a do banco (REGRAS 1 e 2).
       if (!nomeValido(nome.input.value)) return avisar('Informe o nome completo.', 'erro');
       if (!matriculaValida(matricula.input.value)) return avisar('Matricula invalida (4 a 10 digitos).', 'erro');
-      if (!pinValido(pin.input.value)) return avisar('O PIN deve ter exatamente 4 digitos.', 'erro');
+      if (!pinValido(pin.input.value)) return avisar('O PIN deve ter de 4 a 10 digitos.', 'erro');
       if (pin.input.value !== confirmacao.input.value) return avisar('A confirmacao do PIN nao confere.', 'erro');
 
       try {

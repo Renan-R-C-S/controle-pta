@@ -2,10 +2,11 @@
  * AGENDAMENTOS CICLICOS
  * ---------------------------------------------------------------------------
  * Regra de repeticao criada por um administrador em nome de um colaborador
- * ja cadastrado. Dois formatos:
+ * ja cadastrado. Tres formatos:
  *
  *   DIAS_SEMANA     repete nos dias escolhidos (seg/qua/sex, por exemplo)
  *   INTERVALO_DIAS  repete a cada N dias
+ *   DIA_DO_MES      repete num dia fixo do mes (todo dia 5, todo dia 28)
  *
  * As ocorrencias sao materializadas como programacoes comuns no calendario, o
  * que faz a checagem de conflito e a prioridade do QR Code 1 continuarem
@@ -21,6 +22,7 @@ import { tokenAtual } from './auth.js';
 export const TIPOS = {
   DIAS_SEMANA: 'Dias da semana',
   INTERVALO_DIAS: 'A cada N dias',
+  DIA_DO_MES: 'Em um dia do mes',
 };
 
 export const DIAS = [
@@ -35,6 +37,9 @@ export const DIAS = [
 
 /** Frase curta descrevendo a regra, para a lista da administracao. */
 export function descreverRegra(regra) {
+  if (regra.tipo === 'DIA_DO_MES') {
+    return `todo dia ${regra.dia_do_mes}`;
+  }
   if (regra.tipo === 'INTERVALO_DIAS') {
     return regra.intervalo_dias === 1
       ? 'todos os dias'
@@ -52,8 +57,8 @@ export async function listar() {
 
 export async function criar({
   ptaId, funcionarioId, horaInicio, horaFim, tipo,
-  diasSemana = null, intervaloDias = null, dataInicio = null, dataFim = null,
-  fornecedorId = null,
+  diasSemana = null, intervaloDias = null, diaDoMes = null,
+  dataInicio = null, dataFim = null, fornecedorId = null,
 }) {
   return rpc('fn_ciclico_criar', {
     p_token: tokenAtual(),
@@ -64,6 +69,7 @@ export async function criar({
     p_tipo: tipo,
     p_dias_semana: tipo === 'DIAS_SEMANA' ? diasSemana : null,
     p_intervalo_dias: tipo === 'INTERVALO_DIAS' ? intervaloDias : null,
+    p_dia_do_mes: tipo === 'DIA_DO_MES' ? diaDoMes : null,
     p_data_inicio: dataInicio,
     p_data_fim: dataFim,
     p_fornecedor_id: fornecedorId,

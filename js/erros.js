@@ -84,6 +84,27 @@ const MENSAGENS = {
   CICLO_INTERVALO_INVALIDO: 'Informe de quantos em quantos dias a repeticao acontece.',
   CICLO_PERIODO_INVALIDO: 'A data final nao pode ser anterior a inicial.',
 
+  // Redefinicao de PIN
+  PIN_ATUAL_INCORRETO: 'O PIN atual esta incorreto.',
+  PIN_IGUAL_AO_ATUAL: 'O PIN novo precisa ser diferente do atual.',
+
+  // PTAs
+  PTA_CODIGO_INVALIDO: 'O codigo da PTA precisa ter de 3 a 4 numeros. Ex.: 905 ou PTA-905.',
+  PTA_CODIGO_DUPLICADO: 'Ja existe uma PTA com este codigo.',
+  PTA_COM_USO_ABERTO: 'Esta PTA tem um uso em aberto. Ele precisa ser encerrado antes de desabilita-la.',
+  PTA_COM_HISTORICO: 'Esta PTA ja tem uso ou programacao registrada e nao pode ser excluida. Use Desabilitar.',
+
+  // Matriculas reservadas e horizonte
+  RESERVADA_NAO_ENCONTRADA: 'Esta matricula nao esta na lista de reservadas.',
+  HORIZONTE_INVALIDO: 'Informe um horizonte entre 7 e 1095 dias.',
+  CICLO_DIA_DO_MES_INVALIDO: 'Informe um dia do mes entre 1 e 31.',
+
+  // Avisos
+  AVISO_TITULO_INVALIDO: 'O titulo do aviso deve ter de 3 a 80 caracteres.',
+  AVISO_MENSAGEM_INVALIDA: 'A mensagem do aviso deve ter de 3 a 600 caracteres.',
+  AVISO_PRAZO_INVALIDO: 'A data final do aviso precisa ser posterior a inicial.',
+  AVISO_NAO_ENCONTRADO: 'Aviso nao encontrado.',
+
   // Historico
   HISTORICO_IMUTAVEL: 'O historico do sistema nao pode ser alterado.',
 

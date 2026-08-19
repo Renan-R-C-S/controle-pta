@@ -747,3 +747,82 @@ pre {
 }
 .rotulo-dia:has(.cx-dia:checked) { border-color: var(--azul); background: var(--azul-claro); font-weight: 700; }
 .cx-dia { width: 18px; height: 18px; }
+
+
+/* ------------------------------------------- Seletor de horario 12h (AM/PM) */
+.bloco-horario { margin-bottom: .5rem; }
+.linha-horario { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.linha-horario .campo-hora {
+  width: auto;
+  min-width: 84px;
+  min-height: 64px;
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  margin-bottom: 0;
+}
+.sep-horario { font-size: 1.5rem; font-weight: 700; color: var(--texto-suave); }
+
+.grupo-periodo { display: flex; gap: .375rem; margin-left: .25rem; }
+.btn-periodo {
+  min-width: 64px;
+  min-height: 64px;
+  padding: .5rem .75rem;
+  border: 2px solid var(--borda);
+  border-radius: var(--raio);
+  background: var(--superficie);
+  color: var(--texto-suave);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-periodo.ativo { border-color: var(--azul); background: var(--azul); color: #fff; }
+
+.dica-horario { margin-top: .625rem; font-size: .9375rem; }
+/* Virada da meia-noite: precisa saltar aos olhos antes de confirmar. */
+.dica-horario.destaque-amanha {
+  padding: .625rem .75rem;
+  background: var(--laranja-claro);
+  border-left: 4px solid var(--laranja);
+  border-radius: var(--raio-pequeno);
+  color: var(--laranja);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------- Popup de avisos */
+/* Fundo branco fixo, inclusive no modo escuro: o comunicado precisa destoar
+   do resto da tela para nao passar batido. */
+.dialogo-aviso {
+  width: min(94vw, 460px);
+  background: #ffffff;
+  color: #14181d;
+  border-top: 6px solid var(--azul);
+}
+.dialogo-aviso .aviso-cabecalho { margin-bottom: .75rem; }
+.aviso-selo {
+  display: inline-block;
+  padding: .25rem .625rem;
+  border-radius: 999px;
+  background: #e8f0f8;
+  color: #1c5d99;
+  font-size: .6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+.aviso-item { padding: .75rem 0; border-top: 1px solid #e3e8ee; }
+.aviso-item:first-of-type { border-top: none; }
+.aviso-titulo { margin: 0 0 .375rem; font-size: 1.0625rem; color: #14181d; }
+.aviso-mensagem { margin: 0 0 .5rem; white-space: pre-wrap; color: #3f4750; }
+.aviso-rodape { margin: 0; font-size: .8125rem; color: #6b747d; }
+
+/* ------------------------------------------------ Administracao (v4) */
+.area-admin { margin-top: 1.5rem; }
+.btn-em-uso { margin-left: auto; white-space: nowrap; }
+.registro.em-uso-real { border-left: 4px solid var(--verde); }
+.registro.em-uso-previsto { border-left: 4px solid var(--azul); }
+
+.campo-area { min-height: 96px; resize: vertical; font-family: inherit; }
+.campo-multi { min-height: 140px; padding: .5rem; }
+
+.voltar-login { margin-top: 1.25rem; }

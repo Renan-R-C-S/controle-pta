@@ -1080,6 +1080,7 @@ begin
     select jsonb_build_object(
       'tipo', 'AGENDAMENTO',
       'id', a.id,
+      'funcionario_id', a.funcionario_id,
       'pta', p.codigo,
       'funcionario', f.nome,
       'matricula', f.matricula,
@@ -1117,6 +1118,7 @@ begin
     select jsonb_build_object(
       'tipo', 'USO',
       'id', u.id,
+      'funcionario_id', u.funcionario_id,
       'pta', p.codigo,
       'funcionario', f.nome,
       'matricula', f.matricula,

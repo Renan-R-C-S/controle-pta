@@ -10,9 +10,16 @@
 import { APP } from './config.js';
 import { ErroApp } from './erros.js';
 
-/** REGRA 2: PIN com exatamente 4 digitos. */
+/**
+ * REGRA 2: PIN numerico, de 4 a 10 digitos.
+ * Quatro continua sendo o padrao sugerido na tela; quem quiser mais seguranca
+ * digita mais, ate 10. O banco valida a mesma faixa.
+ */
 export function pinValido(pin) {
-  return new RegExp(`^[0-9]{${APP.digitosPin}}$`).test(pin ?? '');
+  // O maximo tem valor de reserva para nao obrigar a mexer em js/config.js,
+  // que e o arquivo das credenciais.
+  const max = APP.digitosPinMax ?? 10;
+  return new RegExp(`^[0-9]{${APP.digitosPin},${max}}$`).test(pin ?? '');
 }
 
 /**

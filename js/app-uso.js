@@ -17,8 +17,10 @@ import { criarFluxoLogin } from './login-ui.js';
 import { MINUTOS_DE_PRAZO, prazo, restantes, salvar as salvarObservacao } from './observacoes.js';
 import { listarPtas, normalizarCodigo, parametrosDaUrl, situacao } from './ptas.js';
 import { criarSeletorTerceiro } from './fornecedor-ui.js';
-import { montarPerfil } from './perfil-ui.js';
-import { agora, dataCurta, duracaoHumana, horaCurta, isoHora, minutosEntre, sincronizarRelogio } from './tempo.js';
+import { criarSeletorHora } from './hora-ui.js';
+import { mostrarAvisosDoLogin } from './aviso-ui.js';
+import { exigirTrocaPinProvisorio, montarPerfil } from './perfil-ui.js';
+import { agora, dataCurta, duracaoHumana, horaCurta, sincronizarRelogio } from './tempo.js';
 import {
   $, avisar, carregandoGlobal, comCarregamento, confirmar, criar, etiqueta, pessoaComTerceiro,
   preencher, mostrarTela, tratarErro,
@@ -82,7 +84,18 @@ async function iniciarPagina() {
 function abrirLogin() {
   const fluxo = criarFluxoLogin($('#login-container'), {
     subtitulo: estado.codigoPta ? `Você está na ${estado.codigoPta}` : undefined,
-    aoEntrar: () => abrirDashboard(),
+    aoEntrar: async () => {
+      // Ordem proposital: quem esta com PIN provisorio troca ANTES de ver
+      // qualquer outra coisa; so entao vem os comunicados.
+      const trocou = await exigirTrocaPinProvisorio();
+      if (!trocou) {
+        sair();
+        abrirLogin();
+        return;
+      }
+      await abrirDashboard();
+      mostrarAvisosDoLogin();
+    },
   });
   mostrarTela('tela-login');
   fluxo.iniciar();
@@ -309,31 +322,18 @@ function abrirInicioDeUso() {
   // Sugestao de 2 horas apenas para preencher o campo; o funcionario decide.
   const sugestao = new Date(inicio.getTime() + 2 * 60 * 60 * 1000);
 
-  const campoFim = criar('input', {
-    classe: 'campo campo-hora',
-    id: 'hora-fim',
-    type: 'time',
-    required: true,
-    value: isoHora(sugestao),
-    'data-foco': 'true',
-  });
-
   const resumo = criar('p', { classe: 'resumo-periodo' });
-  const atualizarResumo = () => {
-    if (!campoFim.value) {
-      resumo.textContent = '';
-      return;
-    }
-    const [h, m] = campoFim.value.split(':').map(Number);
-    const fim = new Date(inicio);
-    fim.setHours(h, m, 0, 0);
-    const minutos = minutosEntre(inicio, fim);
-    resumo.textContent = minutos > 0
-      ? `Duracao prevista: ${duracaoHumana(minutos)}`
-      : 'O horario final deve ser posterior ao horario de inicio.';
-    resumo.classList.toggle('invalido', minutos <= 0);
-  };
-  campoFim.addEventListener('input', atualizarResumo);
+
+  // Controle proprio de 12 horas com AM/PM (item 11). Ele tambem torna visivel
+  // a virada da meia-noite: as 23h, escolher 1:00 AM avisa que e amanha.
+  const campoFim = criarSeletorHora({
+    minutosAdiante: 120,
+    aoMudar: ({ minutos, amanha }) => {
+      resumo.textContent = `Duracao prevista: ${duracaoHumana(minutos)}`
+        + (amanha ? ' (termina depois da meia-noite)' : '');
+      resumo.classList.remove('invalido');
+    },
+  });
 
   const botao = criar('button', { classe: 'btn btn-primario btn-largo', type: 'submit', texto: 'CONFIRMAR USO' });
 
@@ -355,8 +355,8 @@ function abrirInicioDeUso() {
       classe: 'dica',
       texto: 'O horario de inicio e registrado automaticamente pelo servidor no momento da confirmacao.',
     }),
-    criar('label', { classe: 'rotulo', for: 'hora-fim', texto: 'Horario final pretendido' }),
-    campoFim,
+    criar('label', { classe: 'rotulo', texto: 'Horario final pretendido' }),
+    campoFim.elemento,
     resumo,
     terceiro.elemento,
     botao,
@@ -364,14 +364,15 @@ function abrirInicioDeUso() {
 
   formulario.addEventListener('submit', async (evento) => {
     evento.preventDefault();
-    if (!campoFim.value) return avisar('Informe o horario final pretendido.', 'erro');
+    const alvo = campoFim.resumo();
 
     const confirmado = await confirmar({
       titulo: 'Confirmar uso',
       corpo: [
         criar('p', { texto: 'Voce deseja utilizar a PTA:' }),
         criar('p', { classe: 'confirmacao-destaque', texto: estado.codigoPta }),
-        criar('p', { texto: `Das ${horaCurta(agora())} as ${campoFim.value}?` }),
+        criar('p', { texto: `Das ${horaCurta(agora())} as ${alvo.valor}`
+                          + (alvo.amanha ? ' de amanha?' : '?') }),
         terceiro.valor()
           ? criar('p', { classe: 'dica', texto: 'Com terceiro incluido.' })
           : null,
@@ -383,7 +384,7 @@ function abrirInicioDeUso() {
 
     try {
       await comCarregamento(botao, async () => {
-        const resultado = await iniciar(estado.codigoPta, campoFim.value, terceiro.valor());
+        const resultado = await iniciar(estado.codigoPta, alvo.valor, terceiro.valor());
 
         if (resultado.agendamentos_afetados > 0) {
           avisar(

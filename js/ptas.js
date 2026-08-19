@@ -44,3 +44,47 @@ export async function situacao(codigoPta) {
     p_token: tokenAtual(),
   });
 }
+
+/* -------------------------------------------------------------------------- */
+/* Gestao das PTAs (administracao)                                             */
+/* -------------------------------------------------------------------------- */
+
+/** Lista com o estado administrativo: ativo, em uso, e se pode ser excluida. */
+export async function listarParaAdmin() {
+  return rpc('fn_admin_listar_ptas', { p_token: tokenAtual() });
+}
+
+/** O codigo aceita '917', 'pta 917' ou 'PTA-917'. O banco normaliza. */
+export async function criarPta({ codigo, descricao, local }) {
+  return rpc('fn_pta_criar', {
+    p_token: tokenAtual(),
+    p_codigo: codigo,
+    p_descricao: descricao?.trim() || null,
+    p_local: local?.trim() || null,
+  });
+}
+
+export async function alterarPta({ id, codigo, descricao, local }) {
+  return rpc('fn_pta_alterar', {
+    p_token: tokenAtual(),
+    p_pta_id: id,
+    p_codigo: codigo,
+    p_descricao: descricao?.trim() || null,
+    p_local: local?.trim() || null,
+  });
+}
+
+/** Desabilitada, a PTA some das telas de escolha mas mantem o historico. */
+export async function definirAtivo(id, ativo) {
+  return rpc('fn_pta_definir_ativo', { p_token: tokenAtual(), p_pta_id: id, p_ativo: ativo });
+}
+
+/** So funciona enquanto a PTA nunca teve uso, programacao ou regra ciclica. */
+export async function excluirPta(id) {
+  return rpc('fn_pta_excluir', { p_token: tokenAtual(), p_pta_id: id });
+}
+
+/** Item 13: o que esta em uso neste instante. Consulta livre, sem login. */
+export async function emUsoAgora() {
+  return rpc('fn_em_uso_agora');
+}
