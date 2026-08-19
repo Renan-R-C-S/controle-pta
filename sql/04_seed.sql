@@ -43,7 +43,7 @@ on conflict (matricula) do nothing;
 
 -- Se alguma dessas matriculas ja tiver sido cadastrada ANTES desta atualizacao,
 -- promova-a uma unica vez, manualmente:
---   update public.funcionarios set papel = 'ADMIN_MASTER' where matricula = '0591';
+--   update public.funcionarios set papel = 'ADMIN_MASTER' where matricula = '0591' and ativo;
 -- Este script nao faz isso sozinho de proposito: reaplicar o seed devolveria o
 -- papel a alguem de quem o ADMIN_MASTER tivesse acabado de revogar.
 
@@ -66,7 +66,9 @@ select v.nome, v.matricula,
         ('Ana Oliveira',  '10004', '4567', 'PCM')
        ) as v(nome, matricula, pin, setor)
   join public.setores s on s.nome = v.setor
-on conflict (matricula) do nothing;
+-- A unicidade de matricula agora vale so entre os ATIVOS (indice parcial), e o
+-- ON CONFLICT precisa repetir esse mesmo predicado para achar o indice certo.
+on conflict (matricula) where ativo do nothing;
 
 -- =============================================================================
 -- AGENDAMENTOS DE EXEMPLO

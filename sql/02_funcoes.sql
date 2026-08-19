@@ -175,11 +175,24 @@ language sql stable security definer set search_path = public, extensions as $$
 $$;
 
 -- Verifica disponibilidade da matricula antes do cadastro (feedback rapido).
--- A garantia real continua sendo a constraint UNIQUE (REGRA 1).
+-- A garantia real continua sendo o indice unico parcial (REGRA 1).
+--
+-- Duas sutilezas moram aqui:
+--   * so um cadastro ATIVO ocupa a matricula - a de quem foi excluido volta a
+--     ficar livre, e dizer o contrario contradiria a propria regra de reuso;
+--   * o valor passa pela mesma normalizacao do cadastro ('590' -> '0590'),
+--     senao a checagem olharia um numero e a gravacao outro.
 create or replace function public.fn_matricula_disponivel(p_matricula text)
 returns boolean
 language sql stable security definer set search_path = public, extensions as $$
-  select not exists (select 1 from public.funcionarios where matricula = btrim(p_matricula));
+  select not exists (
+    select 1 from public.funcionarios
+     where ativo
+       and matricula = case
+             when char_length(btrim(coalesce(p_matricula, ''))) < 4
+             then lpad(btrim(coalesce(p_matricula, '')), 4, '0')
+             else btrim(coalesce(p_matricula, ''))
+           end);
 $$;
 
 -- Cadastro de funcionario (primeiro acesso - item 6).
@@ -1683,7 +1696,7 @@ begin
                'matricula', r.matricula,
                'papel', r.papel,
                'cadastrada', exists (select 1 from public.funcionarios f
-                                      where f.matricula = r.matricula))
+                                      where f.matricula = r.matricula and f.ativo))
              order by r.matricula), '[]'::jsonb)
         from public.matriculas_reservadas r));
 end $$;

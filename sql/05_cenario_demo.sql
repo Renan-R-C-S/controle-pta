@@ -38,7 +38,10 @@ begin
   v_fim   := least(v_local + interval '100 minutes',
                    v_local::date + time '23:59')::time;
 
-  select id into v_carlos_id from public.funcionarios where matricula = '10003';
+  -- 'and ativo': com o reuso de matricula, um cadastro excluido poderia casar
+  -- aqui e o SELECT INTO pegaria a linha errada sem avisar.
+  select id into v_carlos_id from public.funcionarios
+   where matricula = '10003' and ativo;
   if v_carlos_id is null then
     raise exception 'Execute o arquivo 04_seed.sql antes deste script.';
   end if;

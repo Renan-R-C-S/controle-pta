@@ -81,6 +81,7 @@ declare
   v_ciclico3  uuid; v_ciclico4 uuid;
   v_aviso     uuid; v_aviso2 uuid; v_aviso3 uuid;
   v_int2      int;
+  v_bool2     boolean;
   v_ts        timestamptz;
   v_hora_passada text;
 begin
@@ -1596,6 +1597,58 @@ begin
    where (e->>'id')::uuid = v_uso_a;
   if v_int = 0 then v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'\n';
   else v_falha := v_falha + 1; v_rel := v_rel || '  [FALHA] ' || v_desc || E'\n'; end if;
+
+  -- ===========================================================================
+  -- DISPONIBILIDADE DE MATRICULA (regressao)
+  --
+  -- Estes dois nasceram de um erro real: ao trocar a unicidade global por um
+  -- indice parcial, fn_matricula_disponivel continuou olhando TODOS os
+  -- cadastros e passou a dizer "ocupada" para matricula que a exclusao tinha
+  -- acabado de liberar - exatamente o contrario da regra de reuso.
+  -- ===========================================================================
+
+  -- T150 matricula de quem foi excluido volta a ficar disponivel
+  v_desc := 'T150 matricula liberada aparece como disponivel'; v_erro := null;
+  begin
+    v_r := public.fn_cadastrar_funcionario('Teste Disp', '900905', '1234', v_setor);
+    v_uuid := (v_r->'funcionario'->>'id')::uuid;
+    v_bool := public.fn_matricula_disponivel('900905');       -- deve ser false
+    perform public.fn_admin_desativar_funcionario(v_tm, v_uuid);
+    v_bool2 := public.fn_matricula_disponivel('900905');      -- deve voltar a true
+  exception when others then v_erro := sqlerrm; end;
+  if v_erro is null and v_bool is false and v_bool2 is true then
+    v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'
+';
+  else
+    v_falha := v_falha + 1;
+    v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> antes=' || coalesce(v_bool::text,'?')
+                   || ' depois=' || coalesce(v_bool2::text,'?') || ' ' || coalesce(v_erro,'') || E'
+';
+  end if;
+
+  -- T151 a checagem usa a matricula JA normalizada
+  v_desc := 'T151 disponibilidade considera a matricula normalizada'; v_erro := null;
+  if exists (select 1 from public.funcionarios where matricula = '0906' and ativo) then
+    v_ok := v_ok + 1;
+    v_rel := v_rel || '  [OK]    ' || v_desc || ' (pulado: 0906 ja cadastrada)' || E'
+';
+  else
+    begin
+      perform public.fn_cadastrar_funcionario('Teste Disp Curta', '906', '1234', v_setor);
+      -- '906' normaliza para '0906', que acabou de ser ocupada
+      v_bool := public.fn_matricula_disponivel('906');
+      v_bool2 := public.fn_matricula_disponivel('0906');
+    exception when others then v_erro := sqlerrm; end;
+    if v_erro is null and v_bool is false and v_bool2 is false then
+      v_ok := v_ok + 1; v_rel := v_rel || '  [OK]    ' || v_desc || E'
+';
+    else
+      v_falha := v_falha + 1;
+      v_rel := v_rel || '  [FALHA] ' || v_desc || ' -> curta=' || coalesce(v_bool::text,'?')
+                     || ' longa=' || coalesce(v_bool2::text,'?') || ' ' || coalesce(v_erro,'') || E'
+';
+    end if;
+  end if;
 
   -- ===========================================================================
   -- RELATORIO
